@@ -1,0 +1,338 @@
+{
+  "CPO": {
+    "title": {
+      "en": "CPO / Silicon photonics",
+      "zh-TW": "CPO 共同封裝光學 / 矽光子"
+    },
+    "description": {
+      "en": "Co-packaged optics: moving optical engines next to switch and accelerator chips to cut power and raise bandwidth in AI data centers.",
+      "zh-TW": "共同封裝光學：將光引擎移到交換器與加速器晶片旁，降低功耗並提升 AI 資料中心的頻寬。"
+    },
+    "keywords": [
+      "CPO",
+      "共同封裝",
+      "矽光子",
+      "光通訊",
+      "光引擎",
+      "FAU",
+      "COUPE",
+      "silicon photonics",
+      "co-packaged"
+    ],
+    "segments": [
+      {
+        "name": {
+          "en": "Laser & III-V chips",
+          "zh-TW": "雷射與 III-V 族晶片"
+        },
+        "stage": "upstream",
+        "description": {
+          "en": "InP/GaAs epitaxy, laser and photodetector chips, including the external laser sources CPO needs.",
+          "zh-TW": "InP/GaAs 磊晶、雷射與光偵測器晶片，包括 CPO 所需的外部雷射光源。"
+        },
+        "stocks": {
+          "3081": {
+            "en": "InP laser epitaxy and chips (CW lasers for silicon photonics)",
+            "zh-TW": "InP 雷射磊晶與晶片（矽光子用 CW 雷射）"
+          },
+          "2455": {
+            "en": "III-V epitaxial wafers for lasers and photodetectors",
+            "zh-TW": "雷射與光偵測器用 III-V 族磊晶片"
+          },
+          "3105": {
+            "en": "Compound-semiconductor foundry (GaAs/InP optical devices)",
+            "zh-TW": "化合物半導體代工（GaAs/InP 光元件）"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Silicon photonics & advanced packaging",
+          "zh-TW": "矽光子與先進封裝"
+        },
+        "stage": "upstream",
+        "description": {
+          "en": "Photonic IC fabrication and integrating the optical engine with the switch/ASIC package.",
+          "zh-TW": "光子積體電路製造，以及將光引擎與交換器／ASIC 封裝整合。"
+        },
+        "stocks": {
+          "2330": {
+            "en": "Silicon photonics platform (COUPE) and CoWoS packaging",
+            "zh-TW": "矽光子平台（COUPE）與 CoWoS 封裝"
+          },
+          "3711": {
+            "en": "Advanced packaging and test for silicon photonics / CPO",
+            "zh-TW": "矽光子／CPO 先進封裝與測試"
+          },
+          "6451": {
+            "en": "System-in-package assembly of optical engines and modules",
+            "zh-TW": "光引擎與光模組的系統級封裝（SiP）"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Optical components & fiber connectivity",
+          "zh-TW": "光學元件與光纖連接"
+        },
+        "stage": "midstream",
+        "description": {
+          "en": "Fiber array units, couplers, passive components and fiber cabling that carry light on and off the package.",
+          "zh-TW": "光纖陣列（FAU）、耦合器、被動元件與光纖線材，負責將光訊號導入及導出封裝。"
+        },
+        "stocks": {
+          "3363": {
+            "en": "Fiber array units (FAU) and fiber-to-chip coupling",
+            "zh-TW": "光纖陣列（FAU）與光纖對晶片耦合"
+          },
+          "3450": {
+            "en": "Optical subassemblies and laser packaging",
+            "zh-TW": "光學次模組與雷射封裝"
+          },
+          "6442": {
+            "en": "Fiber cabling, MPO connectors and passive optics",
+            "zh-TW": "光纖線材、MPO 連接器與被動光學元件"
+          },
+          "3163": {
+            "en": "Passive optical components (WDM, splitters)",
+            "zh-TW": "被動光學元件（WDM、分光器）"
+          },
+          "3234": {
+            "en": "Optical receiver and laser components (TO-can, sub-assemblies)",
+            "zh-TW": "光接收與雷射元件（TO-can、次模組）"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Optical modules & engines",
+          "zh-TW": "光模組與光引擎"
+        },
+        "stage": "midstream",
+        "description": {
+          "en": "Pluggable transceivers today and optical engines for CPO; the segment CPO may partly displace.",
+          "zh-TW": "目前的可插拔光收發模組與 CPO 光引擎；CPO 可能部分取代此環節。"
+        },
+        "stocks": {
+          "4979": {
+            "en": "Laser chips packaging and optical transceivers",
+            "zh-TW": "雷射晶片封裝與光收發模組"
+          },
+          "4908": {
+            "en": "Optical transceivers and active components",
+            "zh-TW": "光收發模組與主動元件"
+          },
+          "4977": {
+            "en": "Optical transceivers for data centers",
+            "zh-TW": "資料中心用光收發模組"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Connectors & sockets",
+          "zh-TW": "連接器與插槽"
+        },
+        "stage": "midstream",
+        "description": {
+          "en": "High-speed electrical connectors and sockets around the switch package.",
+          "zh-TW": "交換器封裝周邊的高速電連接器與插槽。"
+        },
+        "stocks": {
+          "3533": {
+            "en": "CPU/ASIC sockets and high-speed connectors",
+            "zh-TW": "CPU/ASIC 插槽與高速連接器"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Test & inspection",
+          "zh-TW": "測試與檢測"
+        },
+        "stage": "support",
+        "description": {
+          "en": "Wafer-level electrical and optical testing of photonic chips.",
+          "zh-TW": "光子晶片的晶圓級電性與光學測試。"
+        },
+        "stocks": {
+          "6223": {
+            "en": "Probe cards and silicon-photonics optical probing",
+            "zh-TW": "探針卡與矽光子光學量測"
+          }
+        }
+      }
+    ]
+  },
+  "AI-server": {
+    "title": {
+      "en": "AI servers",
+      "zh-TW": "AI 伺服器"
+    },
+    "description": {
+      "en": "Assembly, power and thermal suppliers for AI accelerator servers and racks.",
+      "zh-TW": "AI 加速器伺服器與機櫃的組裝、電源及散熱供應商。"
+    },
+    "keywords": [
+      "AI伺服器",
+      "AI 伺服器",
+      "GB200",
+      "GB300",
+      "Rubin",
+      "機櫃",
+      "AI server"
+    ],
+    "segments": [
+      {
+        "name": {
+          "en": "Power & thermal",
+          "zh-TW": "電源與散熱"
+        },
+        "stage": "upstream",
+        "description": {
+          "en": "Power supplies, power shelves and cooling for high-power racks.",
+          "zh-TW": "高功率機櫃的電源供應器、電源櫃與散熱。"
+        },
+        "stocks": {
+          "2308": {
+            "en": "Server power supplies, power shelves and liquid-cooling parts",
+            "zh-TW": "伺服器電源、電源櫃與液冷零組件"
+          },
+          "3017": {
+            "en": "Thermal modules, cold plates and liquid cooling",
+            "zh-TW": "散熱模組、冷板與液冷"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Boards & compute trays",
+          "zh-TW": "主機板與運算托盤"
+        },
+        "stage": "midstream",
+        "description": {
+          "en": "Accelerator baseboards, motherboards and compute-tray assembly.",
+          "zh-TW": "加速器基板、主機板與運算托盤組裝。"
+        },
+        "stocks": {
+          "3231": {
+            "en": "GPU baseboards and compute trays",
+            "zh-TW": "GPU 基板與運算托盤"
+          },
+          "2376": {
+            "en": "Server motherboards and AI servers",
+            "zh-TW": "伺服器主機板與 AI 伺服器"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Rack & system assembly",
+          "zh-TW": "機櫃與系統組裝"
+        },
+        "stage": "downstream",
+        "description": {
+          "en": "Full server and rack integration for cloud providers and accelerator vendors.",
+          "zh-TW": "為雲端業者與加速器廠商進行整機與機櫃整合。"
+        },
+        "stocks": {
+          "2317": {
+            "en": "Rack-level AI server assembly",
+            "zh-TW": "機櫃級 AI 伺服器組裝"
+          },
+          "2382": {
+            "en": "AI server and rack ODM for cloud providers",
+            "zh-TW": "雲端業者的 AI 伺服器與機櫃代工（ODM）"
+          },
+          "6669": {
+            "en": "Rack-level servers for hyperscalers",
+            "zh-TW": "超大型雲端業者的機櫃級伺服器"
+          },
+          "2356": {
+            "en": "Server ODM",
+            "zh-TW": "伺服器代工（ODM）"
+          }
+        }
+      }
+    ]
+  },
+  "cooling": {
+    "title": {
+      "en": "Thermal / liquid cooling",
+      "zh-TW": "散熱 / 液冷"
+    },
+    "description": {
+      "en": "Thermal management for high-power chips: vapor chambers, fans, cold plates and liquid cooling.",
+      "zh-TW": "高功率晶片的熱管理：均熱板、風扇、冷板與液冷。"
+    },
+    "keywords": [
+      "散熱",
+      "液冷",
+      "水冷",
+      "均熱片",
+      "冷板",
+      "liquid cooling"
+    ],
+    "segments": [
+      {
+        "name": {
+          "en": "Chip-level heat spreaders",
+          "zh-TW": "晶片級均熱片"
+        },
+        "stage": "upstream",
+        "description": {
+          "en": "Lids and heat spreaders mounted directly on the processor package.",
+          "zh-TW": "直接安裝於處理器封裝上的上蓋與均熱片。"
+        },
+        "stocks": {
+          "3653": {
+            "en": "Integrated heat spreaders and liquid-cooling parts",
+            "zh-TW": "整合式均熱片（IHS）與液冷零組件"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Air-cooling components",
+          "zh-TW": "氣冷元件"
+        },
+        "stage": "midstream",
+        "description": {
+          "en": "Fans, heat pipes and vapor chambers.",
+          "zh-TW": "風扇、熱導管與均熱板。"
+        },
+        "stocks": {
+          "2421": {
+            "en": "Cooling fans",
+            "zh-TW": "散熱風扇"
+          },
+          "6230": {
+            "en": "Heat pipes, vapor chambers and thermal modules",
+            "zh-TW": "熱導管、均熱板與散熱模組"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Liquid-cooling modules & systems",
+          "zh-TW": "液冷模組與系統"
+        },
+        "stage": "downstream",
+        "description": {
+          "en": "Cold plates, manifolds, CDUs and complete liquid-cooling solutions.",
+          "zh-TW": "冷板、分歧管、冷卻液分配裝置（CDU）與完整液冷方案。"
+        },
+        "stocks": {
+          "3017": {
+            "en": "Cold plates, manifolds and liquid-cooling systems",
+            "zh-TW": "冷板、分歧管與液冷系統"
+          },
+          "3324": {
+            "en": "Cold plates and liquid-cooling modules",
+            "zh-TW": "冷板與液冷模組"
+          }
+        }
+      }
+    ]
+  }
+}
