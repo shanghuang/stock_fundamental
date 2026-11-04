@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from conftest import sign_in
 from tw_fundamental import i18n, llm, theme, web
 from tw_fundamental.analysis import checks
 from tw_fundamental.theme import StockProfile, data_signals
@@ -88,7 +89,9 @@ def client(monkeypatch):
     monkeypatch.setattr(web, "list_stocks", lambda: [{"id": "2330", "name": "台積電", "market": "twse",
                                                        "industry": "半導體業"}])
     web.app.config["TESTING"] = True
-    return web.app.test_client()
+    c = web.app.test_client()
+    sign_in(c)
+    return c
 
 
 def test_web_follows_accept_language(client):

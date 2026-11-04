@@ -1,4 +1,4 @@
-"""Optional Claude layer for theme analysis: web research and qualitative SWOT.
+"""Optional Claude layer for theme analysis: web research, market forecast and qualitative SWOT.
 
 Enabled when Claude credentials are available (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
 or an `ant auth login` profile). Results are cached for a day in .cache/llm/ so
@@ -24,6 +24,8 @@ MODEL = "claude-opus-5-5"
 # retries it on a suitable fallback model within the same call.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_uses": 8}
+# The forecast pass searches for market-size reports and for each company's EPS estimates.
+FORECAST_SEARCH_TOOL = {**WEB_SEARCH_TOOL, "max_uses": 15}
 MAX_CONTINUATIONS = 5
 CACHE_HOURS = 24
 
@@ -79,6 +81,43 @@ class ThemeResearch(BaseModel):
     segments: list[Segment]
     roles: list[RoleAssignment]
     candidates: list[Candidate]
+
+
+class ForecastPoint(BaseModel):
+    year: int
+    low: float
+    base: float
+    high: float
+
+
+class PublishedForecast(BaseModel):
+    publisher: str
+    published: str   # when it was published, e.g. "2026-03"
+    scope: str       # what the figure measures (e.g. CPO switch ports vs all optical transceivers)
+    figure: str      # the forecast as stated, e.g. "US$12.4bn by 2030, 45% CAGR"
+
+
+class SegmentOutlook(BaseModel):
+    segment: str
+    cagr: float      # fraction, 0.25 = 25% a year
+    note: str
+
+
+class EPSEstimate(BaseModel):
+    stock_id: str
+    fiscal_year: int
+    eps: float       # NT$ per share
+    source: str
+
+
+class MarketForecast(BaseModel):
+    market: str      # what is being sized
+    unit: str        # e.g. "US$ billion"
+    points: list[ForecastPoint]
+    published: list[PublishedForecast]
+    segments: list[SegmentOutlook]
+    assumptions: list[str]
+    eps_estimates: list[EPSEstimate]
 
 
 class StockSWOT(BaseModel):
@@ -138,7 +177,7 @@ def _cached(kind: str, payload: dict, refresh: bool, compute):
 
 # --------------------------------------------------------------------------- research
 
-def _research_notes(client, prompt: str, system: str) -> tuple[str, list[dict]]:
+def _research_notes(client, prompt: str, system: str, tool: dict = WEB_SEARCH_TOOL) -> tuple[str, list[dict]]:
     """Web-search research pass. Returns (notes text, sources)."""
     messages = [{"role": "user", "content": prompt}]
     texts, sources, seen = [], [], set()
@@ -146,7 +185,7 @@ def _research_notes(client, prompt: str, system: str) -> tuple[str, list[dict]]:
         resp = _call(
             client.beta.messages.create,
             model=MODEL, max_tokens=16000, system=system, messages=messages,
-            tools=[WEB_SEARCH_TOOL], output_config={"effort": "high"},
+            tools=[tool], output_config={"effort": "high"},
             betas=[FALLBACK_BETA], fallbacks="default",
         )
         if resp.stop_reason == "refusal":
@@ -219,14 +258,77 @@ def research_theme(theme, refresh: bool = False, lang: str = "en") -> dict:
     return _cached("research", payload, refresh, compute)
 
 
+# --------------------------------------------------------------------------- forecast
+
+def forecast_market(theme, segments: list[str], refresh: bool = False, lang: str = "en") -> dict:
+    """Six-year market-size forecast, growth by segment, and analysts' EPS estimates (MarketForecast dict)."""
+    from .forecast import HORIZON
+    year = date.today().year
+    payload = {"title": theme.title, "description": theme.description, "stocks": theme.stock_ids,
+               "segments": segments, "year": year, "schema": 1, "lang": lang}
+
+    def compute() -> dict:
+        client = _client()
+        prompt = (
+            f"Build a market-size outlook for the theme “{theme.title}”. {theme.description}\n"
+            f"Keywords: {', '.join(theme.keywords)}. Today is {date.today().isoformat()}.\n\n"
+            "Use web search. Cover:\n"
+            f"1. Published forecasts of this market's size for {year}–{year + HORIZON} from research firms, "
+            "industry bodies or company statements: the publisher, when it was published, exactly what it "
+            "measures (scope differs a lot between reports), and the figures or CAGR it gives.\n"
+            "2. A reconciled view: pick one market definition and one currency unit, explain how the "
+            f"published figures map onto it, and give low, base and high estimates for every year {year} to "
+            f"{year + HORIZON}, with the assumptions behind each case (adoption timing, pricing, volumes).\n"
+            f"3. Expected annual growth for each supply-chain segment: {', '.join(segments) or 'none listed'}.\n"
+            f"4. Analysts' EPS estimates (NT$) for fiscal {year + 1}, {year + 2} and {year + 3} (whichever years "
+            f"you find; {year} too if that is all there is) for these Taiwan-listed companies: "
+            f"{', '.join(theme.stock_ids) or 'none'}. Taiwanese financial news often reports these as "
+            f"法人預估 {year + 1} 年 EPS. Report only figures you find in a source, with the source, one entry "
+            "per company and year; skip a company rather than estimating it yourself.\n"
+            "Write concise research notes with the numbers."
+        )
+        notes, sources = _research_notes(client, prompt, _system(lang), FORECAST_SEARCH_TOOL)
+        resp = _call(
+            client.beta.messages.parse,
+            model=MODEL, max_tokens=16000, system=_system(lang),
+            output_format=MarketForecast, output_config={"effort": "medium"},
+            betas=[FALLBACK_BETA], fallbacks="default",
+            messages=[{"role": "user", "content":
+                       "Convert these research notes into the structured format.\n"
+                       f"- points: one entry for every year {year} to {year + HORIZON}, in `unit`, with "
+                       "low ≤ base ≤ high. Interpolate between years the notes cover, and say so in "
+                       "assumptions. If the notes have no usable market-size figures, return no points.\n"
+                       "- segments: annual growth (CAGR as a fraction, 0.25 = 25%) for the segments listed "
+                       "below that the notes discuss, using these exact names.\n"
+                       "- eps_estimates: only figures stated in the notes, for the tracked codes below; one "
+                       "entry per company and fiscal year.\n"
+                       f"Segments: {', '.join(segments) or 'none'}\n"
+                       f"Tracked codes: {', '.join(theme.stock_ids) or 'none'}\n\n"
+                       f"<notes>\n{notes}\n</notes>"}],
+        )
+        if resp.stop_reason == "refusal" or resp.parsed_output is None:
+            raise LLMError("Claude could not structure the market forecast")
+        return {**resp.parsed_output.model_dump(), "sources": sources[:20]}
+
+    return _cached("forecast", payload, refresh, compute)
+
+
 # --------------------------------------------------------------------------- SWOT
 
 def swot_analysis(theme, research: dict, profiles, medians: dict, refresh: bool = False,
-                  workers: int = 4, lang: str = "en") -> dict[str, dict]:
+                  workers: int = 4, lang: str = "en", market_forecast: dict | None = None) -> dict[str, dict]:
     from .theme import profile_for_prompt
 
     def clean(v):
         return None if isinstance(v, float) and v != v else v
+
+    outlook = ""
+    if market_forecast:
+        f = market_forecast
+        outlook = (f"Market forecast ({f['market']}, {f['unit']}): base {f['points'][0]['base']:,.1f} in "
+                   f"{f['points'][0]['year']} to {f['points'][-1]['base']:,.1f} in {f['points'][-1]['year']}, "
+                   f"base CAGR {f['cagr']:.1%} (low {f['cagr_low']:.1%}, high {f['cagr_high']:.1%}).\n"
+                   f"Segment growth: {json.dumps(f['segments'], ensure_ascii=False)}\n")
 
     # Shared prefix for every stock's request; marked cacheable so only the first pays full price.
     context = (
@@ -236,10 +338,13 @@ def swot_analysis(theme, research: dict, profiles, medians: dict, refresh: bool 
         f"Risks: {json.dumps(research.get('risks', []), ensure_ascii=False)}\n"
         f"Supply-chain segments: {json.dumps(research.get('segments', []), ensure_ascii=False)}\n"
         f"Candidates: {json.dumps(research.get('candidates', []), ensure_ascii=False)}\n"
+        f"{outlook}"
         f"Peer-group medians: {json.dumps({k: clean(v) for k, v in medians.items()})}\n\n"
         "Metric units: ratios are fractions (0.25 = 25%); fcf_ttm is NT$; per is P/E; per_pct is "
-        "the share of the last 5 years with a lower P/E. `signals` are rule-based observations "
-        "computed from the same numbers. `segment` and `role` place the company in the supply chain."
+        "the share of the last 5 years with a lower P/E; per_fwd is the forward P/E and `forward` says "
+        "whether it uses analysts' estimates or extrapolates trailing EPS with recent revenue growth. "
+        "`signals` are rule-based observations computed from the same numbers. `segment` and `role` "
+        "place the company in the supply chain."
     )
     instructions = (
         "Write a SWOT analysis of this company with respect to the theme above. "
@@ -248,12 +353,14 @@ def swot_analysis(theme, research: dict, profiles, medians: dict, refresh: bool 
         "Use 2–4 concise items per quadrant and cite the specific metric when you use one. "
         "Consider the company's position in the supply chain: pricing power in its segment, "
         "whether the theme grows or displaces its segment, and dependence on upstream or downstream partners. "
+        "Weigh the forward P/E against the expected growth of the market and the company's segment. "
         "If the company's link to the theme is weak or unconfirmed, set exposure accordingly and say so."
     )
 
     def one(p) -> tuple[str, dict]:
         data = json.dumps(profile_for_prompt(p), ensure_ascii=False)
-        payload = {"theme": theme.title, "research": research.get("summary", ""), "stock": data, "lang": lang}
+        payload = {"theme": theme.title, "research": research.get("summary", ""), "stock": data, "lang": lang,
+                   "outlook": outlook}
 
         def compute() -> dict:
             resp = _call(

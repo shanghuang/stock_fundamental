@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
+import pandas as pd
 
-from . import analysis, report
+from . import analysis, forecast, report, theme, theme_store
 from .finmind import FinMindError, fetch
 
 STOCK_ID_RE = re.compile(r"^[0-9A-Za-z]{4,6}$")
@@ -20,10 +22,30 @@ class Report:
     valuation: dict
     checks: list[tuple[bool, str]]
     html: str
+    price: dict = field(default_factory=dict)  # forecast.price_forecast() output
+    outlook: dict | None = None                # theme_store.stock_outlook(): the theme run it borrows from
+
+
+def price_forecast(d: analysis.StockData, refresh: bool = False) -> tuple[dict, dict | None]:
+    """Implied prices for one stock, as in a theme analysis.
+
+    Analysts' estimates and outlook growth come from the newest saved theme run that included the
+    stock; without one, EPS grows at the long-run rate after year 1. The P/E band needs 5 years of
+    history, so a shorter report loads it separately.
+    """
+    if len(d.daily) and d.daily.index.min() > d.daily.index.max() - pd.DateOffset(years=5):
+        d = analysis.load(d.stock_id, 5, refresh=refresh)
+    p = theme.profile_from_data(d)
+    outlook = theme_store.stock_outlook(d.stock_id)
+    est = (outlook or {}).get("eps_estimate")
+    p.forward = forecast.forward_pe(p, {d.stock_id: est} if est else None)
+    growth = outlook["end_growth"] if outlook else forecast.LONG_RUN_GROWTH
+    return forecast.price_forecast(p, (outlook or {}).get("eps_by_year"), growth), outlook
 
 
 def build_report(stock_id: str, years: int = 5, refresh: bool = False, nav: str = "",
-                 lang: str = "en") -> Report:
+                 lang: str = "en", saved_url: Callable[[str], str] | None = None) -> Report:
+    """`saved_url` turns a saved theme run's id into a link (web UI only)."""
     if not STOCK_ID_RE.match(stock_id):
         raise FinMindError(f"Invalid stock id: {stock_id!r}")
     d = analysis.load(stock_id, years, refresh=refresh)
@@ -33,7 +55,10 @@ def build_report(stock_id: str, years: int = 5, refresh: bool = False, nav: str 
     divs = analysis.annual_dividends(d, q_all)
     val = analysis.valuation_summary(d, years)
     checks = analysis.checks(q, rev, divs, financial=d.is_financial, lang=lang)
-    return Report(d, val, checks, report.render(d, q, rev, divs, val, checks, nav=nav, lang=lang))
+    price, outlook = price_forecast(d, refresh)
+    html = report.render(d, q, rev, divs, val, checks, nav=nav, lang=lang, price=price, outlook=outlook,
+                         saved_url=saved_url)
+    return Report(d, val, checks, html, price, outlook)
 
 
 def list_stocks(refresh: bool = False) -> list[dict]:

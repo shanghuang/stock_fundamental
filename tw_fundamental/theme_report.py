@@ -1,4 +1,4 @@
-"""HTML rendering for theme analysis (supply chain, comparison, SWOT cards)."""
+"""HTML rendering for theme analysis (supply chain, market outlook, comparison, valuation, SWOT cards)."""
 from __future__ import annotations
 
 import html
@@ -18,6 +18,7 @@ QUADRANTS = [("strengths", N_("Strengths")), ("weaknesses", N_("Weaknesses")),
              ("opportunities", N_("Opportunities")), ("threats", N_("Threats"))]
 EXPOSURE = {"direct": N_("direct exposure"), "indirect": N_("indirect exposure"),
             "peripheral": N_("peripheral exposure"), "unclear": N_("unclear exposure")}
+LOW_HIGH = N_("low {low} · high {high}")
 
 
 def _e(v) -> str:
@@ -241,6 +242,251 @@ def _swot_card(p: StockProfile, swot: dict | None, news_days: int, link, tr: Tra
     return f"<section class='card'>{head}<div class='swot'>{quads}</div>{extra}</section>"
 
 
+def _tile(label: str, value: str, sub: str = "") -> str:
+    return (f"<div class='tile'><div class='tile-label'>{_e(label)}</div><div class='tile-value'>{_e(value)}</div>"
+            f"<div class='tile-sub'>{_e(sub)}</div></div>")
+
+
+def _sources(sources: list[dict], tr: Translator) -> str:
+    if not sources:
+        return ""
+    links = "".join(f"<li><a href='{_e(s['url'])}' target='_blank' rel='noopener noreferrer'>"
+                    f"{_e(s.get('title') or s['url'])}</a></li>" for s in sources)
+    return f"<details><summary>{tr('Sources ({n})', n=len(sources))}</summary><ul>{links}</ul></details>"
+
+
+def _forecast_chart(cid: str, f: dict, title: str, unit: str, tr: Translator) -> dict:
+    pts = f["points"]
+    return {"id": cid, "title": title, "unit": unit, "x": [str(p["year"]) for p in pts],
+            "base": [round(p["base"], 2) for p in pts], "low": [round(p["low"], 2) for p in pts],
+            "high": [round(p["high"], 2) for p in pts], "names": [tr("Base case"), tr("Low–high range")]}
+
+
+def _outlook(r: ThemeResult, tr: Translator) -> tuple[str, list[dict]]:
+    """Six-year market outlook: Claude's sourced forecast and the tracked companies' projection."""
+    f, proj = r.market_forecast, r.projection
+    parts, tiles, charts = [], [], []
+    if r.forecast_error:
+        parts.append("<p class='notice'>" + tr("<b>Claude market forecast unavailable:</b> {error}.",
+                                              error=_e(r.forecast_error)) + "</p>")
+    if f:
+        (y0, v0), (y1, v1) = [(p["year"], p["base"]) for p in (f["points"][0], f["points"][-1])]
+        tiles += [_tile(tr("Market size, {year}", year=y0), _num(v0, 1), f["unit"]),
+                  _tile(tr("Market size, {year}", year=y1), _num(v1, 1), f["unit"]),
+                  _tile(tr("Forecast CAGR, {start}–{end}", start=y0, end=y1), _pct(f["cagr"], True),
+                        tr(LOW_HIGH, low=_pct(f["cagr_low"], True), high=_pct(f["cagr_high"], True)))]
+        charts.append(_forecast_chart("mkt", f, tr("Market size forecast"), f["unit"], tr))
+        parts.append(f"<p><b>{tr('Market definition')}:</b> {_e(f['market'])}</p>")
+        parts.append(f"<p class='muted small'>{tr('Claude’s reconciliation of published forecasts found by web search. Reports measure different scopes, so compare them below and check the sources.')}</p>")
+    if proj:
+        y0, y1 = proj["points"][0]["year"], proj["points"][-1]["year"]
+        tiles += [_tile(tr("Tracked companies’ revenue growth, last 12 months"), _pct(proj["recent_growth"], True),
+                        tr("{n} companies, through {month}", n=proj["companies"], month=proj["through"])),
+                  _tile(tr("Projected CAGR of tracked revenue, {start}–{end}", start=y0, end=y1),
+                        _pct(proj["cagr"], True),
+                        tr(LOW_HIGH, low=_pct(proj["cagr_low"], True), high=_pct(proj["cagr_high"], True)))]
+        charts.append(_forecast_chart("proj", proj, tr("Tracked companies’ combined revenue, projected"),
+                                      tr("NT$ 億 · {year} is the 12 months through {month}", year=y0,
+                                         month=proj["through"]), tr))
+        parts.append("<p class='muted small'>" + tr(
+            "The tracked-revenue projection starts from the last 12 months’ growth ({g0:+.1%}, capped between "
+            "−30% and +60%) and fades to {lr:.0%} a year by {end}; the low and high cases start {spread:.0f} "
+            "points lower and higher. It describes these companies only and is not a market forecast.",
+            g0=proj["start_growth"], lr=proj["long_run_growth"], end=y1, spread=proj["spread"] * 100) + "</p>")
+        top = proj.get("largest")
+        if top and top["share"] >= 0.5:
+            parts.append("<p class='muted small'>" + tr(
+                "{name} is {share:.0%} of the tracked companies’ combined revenue, so the projection mostly "
+                "reflects it; the segment table below is less affected.", name=_e(top["label"]),
+                share=top["share"]) + "</p>")
+    if f and proj:
+        parts.append("<p>" + tr("Tracked companies grew {g:+.1%} over the last 12 months, against a forecast "
+                                "market CAGR of {cagr:+.1%}.", g=proj["recent_growth"], cagr=f["cagr"]) + "</p>")
+    if not f and not r.research and not r.forecast_error:
+        parts.append(f"<p class='muted'>{tr('Turn on Claude research for published market-size forecasts and analysts’ EPS estimates.')}</p>")
+    if not f and not proj:
+        parts.append(f"<p class='muted'>{tr('Not enough revenue data for a projection.')}</p>")
+        return f"<div class='panel'>{''.join(parts)}</div>", charts
+
+    if f and f["published"]:
+        rows = "".join(f"<tr><td>{_e(x['publisher'])}</td><td>{_e(x['published'])}</td>"
+                       f"<td class='wrap'>{_e(x['scope'])}</td><td class='wrap'>{_e(x['figure'])}</td></tr>"
+                       for x in f["published"])
+        head = "".join(f"<th>{h}</th>" for h in (tr("Publisher"), tr("Published"), tr("Scope"), tr("Forecast")))
+        parts.append(f"<details open><summary>{tr('Published forecasts ({n})', n=len(f['published']))}</summary>"
+                     f"<table class='left'><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></details>")
+    if f and f["assumptions"]:
+        parts.append(f"<details><summary>{tr('Assumptions')}</summary><ul>{_li(f['assumptions'], tr)}</ul></details>")
+    if f:
+        parts.append(_sources(f.get("sources", []), tr))
+
+    table = _segment_outlook(r, tr)
+    chart_html = "".join(
+        f"<section class='chart'><h3>{_e(c['title'])}</h3><div class='unit'>{_e(c['unit'])}</div>"
+        f"<div id='c_{c['id']}' class='plot'></div></section>" for c in charts)
+    return (f"<div class='tiles' style='margin-top:0'>{''.join(tiles)}</div>"
+            f"<div class='grid' style='margin-top:16px'>{chart_html}</div>"
+            f"<div class='panel' style='margin-top:16px'>{''.join(parts)}</div>{table}"), charts
+
+
+def _segment_outlook(r: ThemeResult, tr: Translator) -> str:
+    proj = {s["segment"]: s for s in (r.projection or {}).get("segments", [])}
+    claude = {s["segment"]: s for s in (r.market_forecast or {}).get("segments", [])}
+    stages = {g["name"]: g["stage"] for g in r.segments}
+    names = [g["name"] for g in r.segments if g["name"] in proj or g["name"] in claude]
+    names += [n for n in claude if n not in stages]
+    if not names:
+        return ""
+    has_claude = bool(claude)
+    rows = ""
+    for n in names:
+        pr, cl = proj.get(n, {}), claude.get(n, {})
+        rows += (f"<tr><th scope='row'>{_e(n)}</th>"
+                 f"<td>{tr(STAGE_SHORT[stages[n]]) if n in stages else '–'}</td>"
+                 f"<td>{_pct(pr.get('recent'), True)}</td><td>{_pct(pr.get('cagr'), True)}</td>"
+                 + (f"<td>{_pct(cl.get('cagr'), True)}</td><td class='wrap left'>{_e(cl.get('note', ''))}</td>"
+                    if has_claude else "") + "</tr>")
+    head = [tr("Segment"), tr("Stage"), tr("Tracked revenue, last 12m YoY"), tr("Projected CAGR (tracked)")]
+    if has_claude:
+        head += [tr("Forecast CAGR (Claude)"), tr("Note")]
+    head_html = "".join(f"<th>{h}</th>" for h in head)
+    return (f"<h3 style='margin-top:16px'>{tr('Growth by supply-chain segment')}</h3>"
+            f"<div class='panel scroll' style='margin-top:8px'><table><thead><tr>{head_html}</tr></thead>"
+            f"<tbody>{rows}</tbody></table></div>")
+
+
+BASIS = {"analyst": N_("analyst estimate, FY{year}"), "extrapolated": N_("extrapolated"), "none": N_("not available")}
+
+
+def _basis(fwd: dict, tr: Translator) -> str:
+    basis = fwd.get("basis", "none")
+    text = _e(tr(BASIS[basis], year=fwd.get("fiscal_year")) if basis == "analyst" else tr(BASIS.get(basis, basis)))
+    src = fwd.get("source", "")
+    if basis == "analyst" and src:
+        src_html = (f"<a href='{_e(src)}' target='_blank' rel='noopener noreferrer'>{tr('source')}</a>"
+                    if src.startswith(("http://", "https://")) else _e(src))
+        text += f" <span class='muted small'>({src_html})</span>"
+    return text
+
+
+def _valuation(r: ThemeResult, ok: list[StockProfile], link, tr: Translator) -> tuple[str, dict | None]:
+    """Trailing vs forward P/E per stock, with the basis of each forward EPS."""
+    def per(v):
+        return _num(v, 1, "×") if not _bad(v) and v > 0 else "–"
+
+    rows = "".join(
+        f"<tr><th scope='row'>{_stock_cell(p, link)}</th><td class='left'>{_e(p.segment or '–')}</td>"
+        f"<td>{_num(p.metrics.get('close'), 1)}</td><td>{_num(p.metrics.get('eps_ttm'), 2)}</td>"
+        f"<td>{per(p.metrics.get('per'))}</td><td>{_num(p.forward.get('eps'), 2)}</td>"
+        f"<td><b>{per(p.forward.get('per'))}</b></td><td>{_pct(p.forward.get('growth'), True)}</td>"
+        f"<td class='left'>{_basis(p.forward, tr)}</td></tr>"
+        for p in ok)
+    medians = (f"<tr class='median'><th scope='row'>{tr('Group median')}</th><td></td><td></td><td></td>"
+               f"<td>{per(r.medians.get('per'))}</td><td></td><td>{per(r.medians.get('per_fwd'))}</td>"
+               f"<td></td><td></td></tr>")
+    head = "".join(f"<th>{h}</th>" for h in (
+        tr("Stock"), tr("Segment"), tr("Close (NT$)"), tr("EPS, TTM"), tr("P/E, TTM"), tr("Forward EPS"),
+        tr("Forward P/E"), tr("EPS growth implied"), tr("Basis")))
+    note = tr("Forward P/E = latest close ÷ forward EPS. Analysts’ estimates come from Claude’s web search, "
+              "for the fiscal year shown. Otherwise forward EPS = trailing EPS × (1 + revenue growth over the "
+              "last 3 months, limited to −50%…+100%), which assumes a constant net margin; loss-makers and "
+              "financial companies get none.")
+    table = (f"<p class='muted small'>{note}</p><div class='panel scroll'><table><thead><tr>{head}</tr></thead>"
+             f"<tbody>{rows}{medians}</tbody></table></div>")
+
+    pts = [(p, p.metrics["per"], p.forward["per"]) for p in ok
+           if not _bad(p.metrics.get("per")) and p.metrics["per"] > 0
+           and not _bad(p.forward.get("per")) and p.forward["per"] > 0]
+    if not pts:
+        return table, None
+    pts.sort(key=lambda t: t[2])
+    chart = {"y": [_label(p) for p, _, _ in pts], "ttm": [round(a, 1) for _, a, _ in pts],
+             "fwd": [round(b, 1) for _, _, b in pts], "names": [tr("P/E, TTM"), tr("Forward P/E")]}
+    chart_html = (f"<section class='chart' style='margin-top:16px'><h3>{tr('Trailing vs forward P/E')}</h3>"
+                  f"<div class='unit'>{tr('× earnings, log scale · sorted by forward P/E')}</div>"
+                  f"<div id='c_pe' class='plot' style='height:{28 * len(pts) + 80}px'></div></section>")
+    return table + chart_html, chart
+
+
+def _price_forecast(ok: list[StockProfile], link, tr: Translator) -> tuple[str, dict | None]:
+    """Implied prices from the EPS path × the stock's own P/E band, with upside vs the latest close."""
+    if ok and not any(p.price for p in ok):
+        return f"<p class='muted'>{tr('This saved run is older than price forecasts. Run it again to see them.')}</p>", None
+    have = [p for p in ok if p.price.get("years") and not _bad(p.price["years"][-1].get("base"))]
+    if not have:
+        return f"<p class='muted'>{tr('No company has both a positive EPS path and a P/E history.')}</p>", None
+    n = len(have[0].price["years"])
+    same = all([y["year"] for y in p.price["years"]] == [y["year"] for y in have[0].price["years"]] for p in have)
+    years = [y["year"] for y in have[0].price["years"]]
+    eps_heads = [tr("EPS FY{year}", year=y) for y in years] if same else [tr("EPS year +{n}", n=t + 1) for t in range(n)]
+    last = tr("FY{year}", year=years[-1]) if same else tr("year +{n}", n=n)
+
+    def eps_cell(y):
+        mark = f"<sup title='{_e(tr('analyst estimate'))}'>A</sup>" if y["source"] == "analyst" else ""
+        return f"<td>{_num(y['eps'], 2)}{mark}</td>"
+
+    def pe_cell(pe):
+        if pe["basis"] == "group":
+            return f"<td title='{_e(tr('No P/E history; group median used'))}'>{pe['base']:.1f}×*</td>"
+        title = (tr("5-year P/E: 25th percentile – 75th percentile, median {m:.1f}×", m=pe["base"])
+                 if pe["basis"] == "history" else
+                 tr("Today’s P/E {cur:.1f}× – the 5-year 25th percentile", cur=pe["base"]))
+        return f"<td title='{_e(title)}'>{pe['low']:.1f}–{pe['high']:.1f}×</td>"
+
+    peak_title = _e(tr("Trades below its usual P/E: the market may expect earnings to fall, as at a cyclical "
+                       "peak. Today’s P/E is kept and EPS gets no revenue momentum, but these prices may "
+                       "still be too high."))
+
+    rows = []
+    for p in sorted(have, key=lambda p: -p.price["upside"]):
+        pf, fin = p.price, p.price["years"][-1]
+        peak = f" <span class='warn' title='{peak_title}'>⚠</span>" if pf.get("peak") else ""
+        rows.append(
+            f"<tr><th scope='row'>{_stock_cell(p, link)}{peak}</th><td>{_num(pf['close'], 1)}</td>{pe_cell(pf['pe'])}"
+            + "".join(eps_cell(y) for y in pf["years"])
+            + f"<td>{_num(fin['low'], 0)}</td><td><b>{_num(fin['base'], 0)}</b></td><td>{_num(fin['high'], 0)}</td>"
+            f"<td><b>{_pct(pf['upside'], True)}</b></td><td>{_pct(pf['annual'], True)}</td></tr>")
+    head = "".join(f"<th>{h}</th>" for h in (
+        tr("Stock"), tr("Close (NT$)"), tr("P/E band"), *eps_heads,
+        tr("{year} low", year=last), tr("{year} base", year=last), tr("{year} high", year=last),
+        tr("Base vs close"), tr("Annualized")))
+    missing = [p for p in ok if p not in have]
+    skipped = (f"<p class='muted small'>{tr('No implied price (loss-making, financial without estimates, or no P/E data): {names}.', names=', '.join(_label(p) for p in missing))}</p>"
+               if missing else "")
+    note = tr("Implied price = EPS for the fiscal year × the stock’s own P/E band over the last 5 years "
+              "(25th percentile = low, median = base, 75th percentile = high, at most twice the median; "
+              "* = group median, no history). "
+              "EPS uses analysts’ estimates where Claude found them (A). Otherwise year 1 is the forward EPS "
+              "above, and later years grow at the 6-year outlook of the company’s supply-chain segment, or "
+              "the theme’s, kept within 0–15% a year. ⚠ marks a stock trading below its usual P/E, which "
+              "often means the market expects earnings to fall: its base case keeps today’s P/E and its "
+              "EPS gets no revenue momentum. Prices are for the end of each fiscal year and exclude "
+              "dividends. They show what the price would be if earnings follow this path and the market "
+              "values the stock as it has; they are not price targets.")
+    peaks = [p for p in have if p.price.get("peak")]
+    if peaks:
+        note_peak = tr("{n} of {total} companies trade below their usual P/E (⚠): treat their implied prices "
+                       "with extra caution.", n=len(peaks), total=len(have))
+        note += " " + note_peak
+    table = (f"<p class='muted small'>{_e(note)}</p><div class='panel scroll'><table><thead><tr>{head}</tr></thead>"
+             f"<tbody>{''.join(rows)}</tbody></table></div>{skipped}")
+
+    pts = sorted(have, key=lambda p: p.price["upside"])
+    chart = {"y": [_label(p) for p in pts],
+             "base": [round(p.price["upside"], 4) for p in pts],
+             "low": [round(p.price["upside_low"], 4) if not _bad(p.price["upside_low"]) else None for p in pts],
+             "high": [round(p.price["upside_high"], 4) if not _bad(p.price["upside_high"]) else None for p in pts],
+             "prices": [[round(p.price["years"][-1][k], 1) for k in ("low", "base", "high")] + [round(p.price["close"], 1)]
+                        for p in pts],
+             "names": [tr("Base case"), tr("P/E band range")],
+             "labels": [tr("Implied price"), tr("Close (NT$)")]}
+    chart_html = (f"<section class='chart' style='margin-top:16px'><h3>"
+                  f"{_e(tr('Implied price at the end of {year} vs the latest close', year=last))}</h3>"
+                  f"<div class='unit'>{_e(tr('% above or below the close · line = P/E band, dot = median P/E'))}</div>"
+                  f"<div id='c_price' class='plot' style='height:{28 * len(pts) + 80}px'></div></section>")
+    return table + chart_html, chart
+
+
 def _charts(ok: list[StockProfile], tr: Translator) -> list[dict]:
     charts = []
     for cid, title, key, unit in [("rev3m", tr("Revenue growth, last 3 months vs a year earlier"), "rev_3m_yoy",
@@ -271,15 +517,19 @@ def render(r: ThemeResult, nav: str = "", link: Callable[[str], str] | None = No
         f"<div id='c_{c['id']}' class='plot' style='height:{max(260, 26 * len(c['y']) + 60)}px'></div></section>"
         for c in charts
     )
+    outlook_html, forecast_charts = _outlook(r, tr)
+    valuation_html, pe_chart = _valuation(r, ok, link, tr)
+    price_html, price_chart = _price_forecast(ok, link, tr)
     cards = "".join(_swot_card(p, swot.get(p.stock_id), r.news_days, link, tr) for p in ok)
     failed_html = (f"<h2>{tr('Skipped')}</h2><div class='panel'><ul>" + "".join(
         f"<li>{_e(p.stock_id)}: {_e(p.error)}</li>" for p in failed) + "</ul></div>") if failed else ""
     meta = tr("Keywords: {keywords} · {n} stocks · news from the last {days} day(s) · generated {time}",
               keywords=", ".join(r.theme.keywords), n=len(ok), days=r.news_days,
-              time=f"{datetime.now():%Y-%m-%d %H:%M}")
+              time=r.generated.replace("T", " ") or f"{datetime.now():%Y-%m-%d %H:%M}")
     footer = " ".join([
         tr("Data: FinMind (TWSE / TPEx / MOPS filings, news headlines)."),
         tr("Research and SWOT: Claude with web search.") if r.research else "",
+        tr("Forecasts and forward estimates are uncertain by nature; treat them as scenarios, not predictions."),
         tr("Data signals are rule-based and use thresholds such as ROE ≥ 15% and P/E percentile ≥ 80%."),
         tr("For research only; not investment advice."),
     ])
@@ -302,9 +552,18 @@ def render(r: ThemeResult, nav: str = "", link: Callable[[str], str] | None = No
 {_supply_chain(r, ok, link, tr)}
 {seg_chart_html}
 
+<h2>{tr('Market outlook')}</h2>
+{outlook_html}
+
 <h2>{tr('Comparison')}</h2>
 <div class="grid">{chart_html}</div>
 <div class="panel scroll" style="margin-top:16px">{_table(ok, r.medians, link, tr)}</div>
+
+<h2>{tr('Forward valuation')}</h2>
+{valuation_html}
+
+<h2>{tr('Price forecast')}</h2>
+{price_html}
 
 <h2>{tr('SWOT by company')}</h2>
 <div class="cards">{cards}</div>
@@ -315,9 +574,14 @@ def render(r: ThemeResult, nav: str = "", link: Callable[[str], str] | None = No
 <script>
 const CHARTS = {json.dumps(charts, ensure_ascii=False).replace("</", "<\\/")};
 const SEG = {json.dumps(seg_chart, ensure_ascii=False).replace("</", "<\\/")};
+const FORECASTS = {json.dumps(forecast_charts, ensure_ascii=False).replace("</", "<\\/")};
+const PE = {json.dumps(pe_chart, ensure_ascii=False).replace("</", "<\\/")};
+const PRICE = {json.dumps(price_chart, ensure_ascii=False).replace("</", "<\\/")};
 const THEMES = {{
-  light: {{ bar: "#2a78d6", text: "#0b0b0b", muted: "#52514e", grid: "#e9e8e4", ref: "#7a7974", surface: "#fcfcfb" }},
-  dark:  {{ bar: "#3987e5", text: "#f0efec", muted: "#c3c2b7", grid: "#2e2e2c", ref: "#8f8e86", surface: "#1a1a19" }},
+  light: {{ bar: "#2a78d6", band: "rgba(42,120,214,0.16)", text: "#0b0b0b", muted: "#52514e", grid: "#e9e8e4",
+           ref: "#7a7974", surface: "#fcfcfb" }},
+  dark:  {{ bar: "#3987e5", band: "rgba(57,135,229,0.24)", text: "#f0efec", muted: "#c3c2b7", grid: "#2e2e2c",
+           ref: "#8f8e86", surface: "#1a1a19" }},
 }};
 const mq = window.matchMedia("(prefers-color-scheme: dark)");
 function draw() {{
@@ -349,8 +613,68 @@ function draw() {{
       showlegend: true, legend: {{ orientation: "h", x: 0, y: 1.02, yanchor: "bottom" }},
       hoverlabel: {{ bgcolor: t.surface, bordercolor: t.grid, font: {{ color: t.text }} }},
       xaxis: {{ tickformat: "+.0%", gridcolor: t.grid, zerolinecolor: t.ref }},
-      yaxis: {{ type: "category", automargin: true, tickfont: {{ color: t.text }},
+      yaxis: {{ type: "category", automargin: true, tickfont: {{ color: t.text }}, gridcolor: t.grid,
                categoryorder: "array", categoryarray: [...SEG.order].reverse() }},
+    }}, {{ displayModeBar: false, responsive: true }});
+  }}
+  const base = (t) => ({{
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: {{ color: t.muted, size: 12 }}, showlegend: true,
+    legend: {{ orientation: "h", x: 0, y: 1.02, yanchor: "bottom" }},
+    hoverlabel: {{ bgcolor: t.surface, bordercolor: t.grid, font: {{ color: t.text }} }},
+  }});
+  for (const f of FORECASTS) {{
+    const range = f.low.map((v, i) => [v, f.high[i]]);
+    Plotly.react("c_" + f.id, [
+      {{ type: "scatter", mode: "lines", x: f.x, y: f.high, line: {{ width: 0 }}, hoverinfo: "skip", showlegend: false }},
+      {{ type: "scatter", mode: "lines", x: f.x, y: f.low, line: {{ width: 0 }}, fill: "tonexty", fillcolor: t.band,
+         name: f.names[1], customdata: range,
+         hovertemplate: f.names[1] + ": %{{customdata[0]:,.1f}} – %{{customdata[1]:,.1f}}<extra></extra>" }},
+      {{ type: "scatter", mode: "lines+markers", x: f.x, y: f.base, name: f.names[0],
+         line: {{ color: t.bar, width: 2 }}, marker: {{ color: t.bar, size: 8, line: {{ color: t.surface, width: 2 }} }},
+         hovertemplate: f.names[0] + ": %{{y:,.1f}}<extra></extra>" }},
+    ], {{
+      ...base(t), margin: {{ l: 56, r: 16, t: 8, b: 32 }}, hovermode: "x unified",
+      xaxis: {{ type: "category", gridcolor: t.grid, showgrid: false }},
+      yaxis: {{ gridcolor: t.grid, zerolinecolor: t.ref, rangemode: "tozero", tickformat: ",.0f" }},
+    }}, {{ displayModeBar: false, responsive: true }});
+  }}
+  if (PE) {{
+    const lx = [], ly = [];
+    PE.y.forEach((y, i) => {{ lx.push(PE.ttm[i], PE.fwd[i], null); ly.push(y, y, null); }});
+    Plotly.react("c_pe", [
+      {{ type: "scatter", mode: "lines", x: lx, y: ly, line: {{ color: t.ref, width: 2 }}, hoverinfo: "skip",
+         showlegend: false }},
+      {{ type: "scatter", mode: "markers", name: PE.names[0], x: PE.ttm, y: PE.y,
+         marker: {{ symbol: "circle-open", color: t.text, size: 10, line: {{ width: 2 }} }},
+         hovertemplate: "%{{y}}<br>" + PE.names[0] + " %{{x:.1f}}×<extra></extra>" }},
+      {{ type: "scatter", mode: "markers", name: PE.names[1], x: PE.fwd, y: PE.y,
+         marker: {{ color: t.bar, size: 11, line: {{ color: t.surface, width: 2 }} }},
+         hovertemplate: "%{{y}}<br>" + PE.names[1] + " %{{x:.1f}}×<extra></extra>" }},
+    ], {{
+      ...base(t), margin: {{ l: 120, r: 16, t: 8, b: 32 }},
+      xaxis: {{ type: "log", gridcolor: t.grid, ticksuffix: "×" }},
+      yaxis: {{ type: "category", automargin: true, tickfont: {{ color: t.text }}, gridcolor: t.grid, categoryarray: PE.y,
+               categoryorder: "array" }},
+    }}, {{ displayModeBar: false, responsive: true }});
+  }}
+  if (PRICE) {{
+    const lx = [], ly = [];
+    PRICE.y.forEach((y, i) => {{
+      if (PRICE.low[i] !== null && PRICE.high[i] !== null) {{ lx.push(PRICE.low[i], PRICE.high[i], null); ly.push(y, y, null); }}
+    }});
+    Plotly.react("c_price", [
+      {{ type: "scatter", mode: "lines", name: PRICE.names[1], x: lx, y: ly, line: {{ color: t.bar, width: 6 }},
+         opacity: 0.35, hoverinfo: "skip" }},
+      {{ type: "scatter", mode: "markers", name: PRICE.names[0], x: PRICE.base, y: PRICE.y, customdata: PRICE.prices,
+         marker: {{ color: t.bar, size: 11, line: {{ color: t.surface, width: 2 }} }},
+         hovertemplate: "%{{y}}<br>" + PRICE.labels[0] + " NT$ %{{customdata[1]:,.0f}} (%{{x:+.0%}})<br>" +
+           "%{{customdata[0]:,.0f}} – %{{customdata[2]:,.0f}}<br>" + PRICE.labels[1] + " %{{customdata[3]:,.1f}}<extra></extra>" }},
+    ], {{
+      ...base(t), margin: {{ l: 120, r: 16, t: 8, b: 32 }},
+      xaxis: {{ tickformat: "+.0%", gridcolor: t.grid, zeroline: true, zerolinecolor: t.ref, zerolinewidth: 2 }},
+      yaxis: {{ type: "category", automargin: true, tickfont: {{ color: t.text }}, gridcolor: t.grid,
+               categoryarray: PRICE.y, categoryorder: "array" }},
     }}, {{ displayModeBar: false, responsive: true }});
   }}
 }}
@@ -380,7 +704,7 @@ summary { cursor: pointer; color: var(--text-secondary); }
 .badge { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px;
   font-size: 12px; color: var(--text-secondary); }
 .takeaway { margin: 12px 0 0; font-weight: 500; }
-.small { font-size: 12px; }
+.warn { color: var(--critical); cursor: help; }
 .news li { margin: 4px 0; }
 .news a { color: var(--text-primary); }
 table.left th, table.left td { text-align: left; }

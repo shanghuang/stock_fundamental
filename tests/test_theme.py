@@ -199,3 +199,18 @@ def test_swot_failure_is_per_stock(fake_client, monkeypatch):
     monkeypatch.setattr(fake_client, "parse", refuse)
     out = llm.swot_analysis(make_theme("CPO"), {"summary": "S"}, [profile()], {})
     assert "error" in out["1234"]
+
+
+def test_theme_name_matches_preset_title_or_unique_keyword():
+    for name in ("DRAM", "記憶體", "hbm", "Memory (DRAM / NAND flash)", "記憶體（DRAM / NAND 快閃記憶體）"):
+        assert make_theme(name).key == "memory", name
+    assert make_theme("散熱").key == "cooling" and make_theme("矽光子").key == "CPO"
+    assert make_theme("DRAM", stock_ids=["2330"]).stock_ids == ["2330"]  # overrides still apply
+
+
+def test_suggest_stocks_matches_names_and_industries():
+    listed = [{"id": "2603", "name": "長榮", "industry": "航運業"}, {"id": "2618", "name": "長榮航", "industry": "航運業"},
+              {"id": "2330", "name": "台積電", "industry": "半導體業"}]
+    assert [s["id"] for s in theme.suggest_stocks(["航運"], listed)] == ["2603", "2618"]
+    assert [s["id"] for s in theme.suggest_stocks(["長榮航"], listed)] == ["2618"]
+    assert theme.suggest_stocks(["x", ""], listed) == []  # one-character terms are ignored

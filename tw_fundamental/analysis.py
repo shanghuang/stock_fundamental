@@ -174,6 +174,8 @@ def valuation_summary(d: StockData, years: int) -> dict:
         if not hist.empty and pd.notna(s[key]):
             s[f"{key}_pct"] = (hist < s[key]).mean()
             s[f"{key}_quantiles"] = hist.quantile([0.1, 0.5, 0.9]).tolist()
+        if not hist.empty:
+            s[f"{key}_quartiles"] = hist.quantile([0.25, 0.5, 0.75]).tolist()
     return s
 
 

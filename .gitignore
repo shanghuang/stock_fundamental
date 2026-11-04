@@ -21,6 +21,9 @@ htmlcov/
 .cache/
 reports/
 
+# User accounts database and the session signing key
+data/
+
 # Secrets (ANTHROPIC_API_KEY, FINMIND_TOKEN)
 .env
 .env.*

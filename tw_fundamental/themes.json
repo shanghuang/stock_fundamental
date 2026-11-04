@@ -334,5 +334,130 @@
         }
       }
     ]
+  },
+  "memory": {
+    "title": {
+      "en": "Memory (DRAM / NAND flash)",
+      "zh-TW": "記憶體（DRAM / NAND 快閃記憶體）"
+    },
+    "description": {
+      "en": "DRAM and flash memory: chipmakers, chip designers, packaging and testing, controllers, and module brands.",
+      "zh-TW": "DRAM 與快閃記憶體：晶片製造、IC 設計、封測、控制晶片與模組品牌。"
+    },
+    "keywords": [
+      "DRAM",
+      "記憶體",
+      "NAND",
+      "快閃記憶體",
+      "DDR5",
+      "HBM",
+      "memory"
+    ],
+    "segments": [
+      {
+        "name": {
+          "en": "Memory chipmakers",
+          "zh-TW": "記憶體晶片製造"
+        },
+        "stage": "upstream",
+        "description": {
+          "en": "Companies with their own fabs that make DRAM or flash chips.",
+          "zh-TW": "自有晶圓廠、生產 DRAM 或快閃記憶體晶片的公司。"
+        },
+        "stocks": {
+          "2408": {
+            "en": "DRAM maker",
+            "zh-TW": "DRAM 製造"
+          },
+          "2344": {
+            "en": "Specialty DRAM, NOR and NAND flash",
+            "zh-TW": "利基型 DRAM、NOR 與 NAND 快閃記憶體"
+          },
+          "6770": {
+            "en": "DRAM and foundry services",
+            "zh-TW": "DRAM 與晶圓代工"
+          },
+          "2337": {
+            "en": "NOR and NAND flash",
+            "zh-TW": "NOR 與 NAND 快閃記憶體"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Memory chip design",
+          "zh-TW": "記憶體 IC 設計"
+        },
+        "stage": "upstream",
+        "description": {
+          "en": "Fabless designers of specialty DRAM and flash.",
+          "zh-TW": "無晶圓廠的利基型 DRAM 與快閃記憶體設計公司。"
+        },
+        "stocks": {
+          "3006": {
+            "en": "Specialty DRAM and flash design",
+            "zh-TW": "利基型 DRAM 與快閃記憶體設計"
+          },
+          "5351": {
+            "en": "Specialty DRAM design",
+            "zh-TW": "利基型 DRAM 設計"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Packaging, testing and controllers",
+          "zh-TW": "封測與控制晶片"
+        },
+        "stage": "midstream",
+        "description": {
+          "en": "Memory packaging and testing, and flash controller chips.",
+          "zh-TW": "記憶體封裝測試與快閃記憶體控制晶片。"
+        },
+        "stocks": {
+          "6239": {
+            "en": "Memory packaging and testing",
+            "zh-TW": "記憶體封裝測試"
+          },
+          "8150": {
+            "en": "Memory and driver IC packaging and testing",
+            "zh-TW": "記憶體與驅動 IC 封裝測試"
+          },
+          "8299": {
+            "en": "NAND flash controllers and storage products",
+            "zh-TW": "NAND 快閃記憶體控制晶片與儲存產品"
+          }
+        }
+      },
+      {
+        "name": {
+          "en": "Modules and storage brands",
+          "zh-TW": "記憶體模組與儲存品牌"
+        },
+        "stage": "downstream",
+        "description": {
+          "en": "Buy memory chips and sell DRAM modules, SSDs and flash cards; earnings swing with chip prices.",
+          "zh-TW": "採購記憶體晶片、銷售 DRAM 模組、SSD 與記憶卡；獲利隨晶片價格波動。"
+        },
+        "stocks": {
+          "3260": {
+            "en": "DRAM modules, SSDs and flash cards",
+            "zh-TW": "DRAM 模組、SSD 與記憶卡"
+          },
+          "4967": {
+            "en": "DRAM modules and SSDs",
+            "zh-TW": "DRAM 模組與 SSD"
+          },
+          "8271": {
+            "en": "Industrial memory modules and SSDs",
+            "zh-TW": "工控記憶體模組與 SSD"
+          },
+          "2451": {
+            "en": "Flash cards, SSDs and DRAM modules",
+            "zh-TW": "記憶卡、SSD 與 DRAM 模組"
+          }
+        }
+      }
+    ]
   }
 }

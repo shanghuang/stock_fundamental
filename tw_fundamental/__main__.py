@@ -33,6 +33,14 @@ def main(argv: list[str] | None = None) -> int:
           f"P/B {val.get('PBR', float('nan')):.2f}  yield {val.get('dividend_yield', float('nan')):.2f}%")
     if d.is_financial:
         print("  note: financial company; leverage, liquidity and cash-flow checks skipped")
+    pf = r.price
+    if pf.get("years"):
+        fin = pf["years"][-1]
+        eps = ", ".join(f"FY{y['year']} {y['eps']:.2f}" for y in pf["years"])
+        print(f"  price forecast: EPS {eps}; FY{fin['year']} implied NT$ {fin['low']:,.0f}–{fin['high']:,.0f} "
+              f"(base {fin['base']:,.0f}, {pf['upside']:+.0%} vs close){'  ⚠ below usual P/E' if pf['peak'] else ''}")
+        print(f"    outlook: {r.outlook['title'] + ' ' + r.outlook['created'][:10] if r.outlook else 'long-run default'}, "
+              f"{pf['end_growth']:.0%}/yr after year 1")
     for ok, text in r.checks:
         print(f"  [{'PASS' if ok else 'FAIL'}] {text}")
 

@@ -171,13 +171,104 @@ def _dividend_table(divs: pd.DataFrame, tr: Translator) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>"
 
 
+def _price_section(price: dict | None, outlook: dict | None, tr: Translator,
+                   saved_url=None) -> tuple[str, dict | None]:
+    """Implied prices from the EPS path × the stock's own P/E band (see forecast.price_forecast)."""
+    e = html.escape
+    if not price or not price.get("years"):
+        return (f"<div class='panel'><p class='muted'>{tr('No implied price: it needs a positive EPS and a P/E history. Loss-making companies have none.')}</p></div>",
+                None)
+    pe, years, close = price["pe"], price["years"], price["close"]
+    fin = years[-1]
+    source_label = {"analyst": tr("Analyst estimate"), "extrapolated": tr("Recent revenue growth"),
+                    "projected": tr("Outlook growth")}
+    rows = "".join(
+        f"<tr><th scope='row'>{tr('FY{year}', year=y['year'])}</th><td>{_num(y['eps'])}</td>"
+        f"<td>{_pct(y['growth'], True)}</td><td class='src'>{e(source_label[y['source']])}"
+        + (f" <span class='muted'>({e(y['ref'])})</span>" if y.get("ref") else "")
+        + f"</td><td>{_num(y['low'], 0)}</td><td><b>{_num(y['base'], 0)}</b></td><td>{_num(y['high'], 0)}</td>"
+        f"<td>{_pct(y['base'] / close - 1, True)}</td></tr>"
+        for y in years)
+    head = "".join(f"<th{' class=src' if h == tr('EPS basis') else ''}>{h}</th>" for h in (
+        tr("Fiscal year"), tr("EPS (NT$)"), tr("EPS growth"), tr("EPS basis"), tr("Low"), tr("Base"),
+        tr("High"), tr("Base vs close")))
+
+    def tile(label, value, sub=""):
+        return (f"<div class='tile'><div class='tile-label'>{label}</div>"
+                f"<div class='tile-value'>{value}</div><div class='tile-sub'>{sub}</div></div>")
+
+    if pe["basis"] == "below":
+        band_sub = tr("today’s {cur:.1f}× up to the 5-year 25th percentile", cur=pe["base"])
+    else:
+        band_sub = tr("5-year 25th–75th percentile, median {m:.1f}×", m=pe["base"])
+    tiles = "".join([
+        tile(tr("{year} base case", year=tr("FY{year}", year=fin["year"])), f"NT$ {_num(fin['base'], 0)}",
+             tr("range NT$ {low}–{high}", low=_num(fin["low"], 0), high=_num(fin["high"], 0))),
+        tile(tr("Base vs close"), _pct(price["upside"], True),
+             tr("{annual} a year · close NT$ {close}", annual=_pct(price["annual"], True), close=_num(close, 1))),
+        tile(tr("P/E band"), f"{pe['low']:.1f}–{pe['high']:.1f}×", band_sub),
+        tile(tr("EPS growth after year 1"), _pct(price["end_growth"]),
+             tr("theme outlook") if outlook else tr("long-run default")),
+    ])
+
+    if outlook:
+        name = e(outlook["title"])
+        if saved_url:
+            name = f"<a href='{e(saved_url(outlook['id']))}'>{name}</a>"
+        segment = tr(", segment “{segment}”", segment=e(outlook["segment"])) if outlook.get("segment") else ""
+        src = tr("Outlook growth and any analysts’ estimates come from the theme analysis {name}{segment} "
+                 "({time}).", name=name, segment=segment, time=e(outlook["created"][:16].replace("T", " ")))
+        if not outlook.get("claude"):
+            src += " " + e(tr("That run had no Claude research, so there are no analysts’ estimates."))
+    else:
+        src = e(tr("No theme analysis in the last 30 days includes this stock, so EPS grows at the long-run "
+                   "{g} a year after year 1. Run a theme that includes it (with Claude, for analysts’ "
+                   "estimates) to use its industry outlook.", g=_pct(price["end_growth"], False)))
+    warn = (f"<p class='warn-note'><b>⚠ {tr('Possible earnings peak.')}</b> "
+            f"{e(tr('The stock trades below its usual P/E, so the market may expect earnings to fall, as at a cyclical peak. The base case keeps today’s P/E and EPS gets no revenue momentum, but these prices may still be too high.'))}</p>"
+            if price.get("peak") else "")
+    note = tr("Implied price = EPS for the fiscal year × the stock’s own P/E band over the last 5 years "
+              "(25th percentile = low, median = base, 75th percentile = high, at most twice the median). "
+              "Year 1 EPS is an analyst estimate when there is one, otherwise trailing EPS grown with the "
+              "last 3 months’ revenue; later years grow at the outlook rate, kept within 0–15% a year. "
+              "Prices are for the end of each fiscal year and exclude dividends. They show what the price "
+              "would be if earnings follow this path and the market values the stock as it has; they are "
+              "not price targets.")
+    chart = {
+        "id": "price", "title": "", "unit": "NT$",
+        "traces": [{"type": "scatter", "mode": "markers", "name": tr("Base case"), "slot": 1,
+                    "x": [tr("FY{year}", year=y["year"]) for y in years], "y": [round(y["base"], 1) for y in years],
+                    "error_y": {"type": "data", "symmetric": False, "thickness": 2, "width": 8,
+                                "array": [round(y["high"] - y["base"], 1) for y in years],
+                                "arrayminus": [round(y["base"] - y["low"], 1) for y in years]},
+                    "customdata": [[round(y["low"], 1), round(y["high"], 1)] for y in years],
+                    "hovertemplate": tr("%{x}<br>Base NT$ %{y:,.0f}<br>Range NT$ %{customdata[0]:,.0f}–%{customdata[1]:,.0f}")
+                                     + "<extra></extra>"}],
+        "layout": {"xaxis": {"type": "category"}, "yaxis": {"rangemode": "tozero"}, "hovermode": "closest",
+                   "shapes": [{"type": "line", "xref": "paper", "x0": 0, "x1": 1, "y0": close, "y1": close,
+                               "line": {"dash": "dot", "width": 1}, "role": "ref"}],
+                   "annotations": [{"xref": "paper", "x": 0.17, "y": close, "xanchor": "center", "yanchor": "bottom",
+                                    "text": tr("Close {close}", close=_num(close, 1)), "showarrow": False,
+                                    "role": "ref"}]},
+    }
+    body = (f"<div class='tiles'>{tiles}</div>{warn}"
+            f"<div class='price'><div class='panel scroll'><table><thead><tr>{head}</tr></thead>"
+            f"<tbody>{rows}</tbody></table></div>"
+            f"<section class='chart'><h3>{e(tr('Implied price by fiscal year'))}</h3>"
+            f"<div class='unit'>{e(tr('NT$ · dot = median P/E, bar = P/E band, dotted line = latest close'))}</div>"
+            f"<div id='c_price' class='plot'></div></section></div>"
+            f"<p class='muted small'>{src} {e(note)}</p>")
+    return body, chart
+
+
 def tr_market(market: str, lang: str) -> str:
     tr = translator(lang)
     return {"twse": tr("TWSE 上市"), "tpex": tr("TPEx 上櫃")}.get(market, market)
 
 
 def render(d: StockData, q: pd.DataFrame, rev: pd.DataFrame, divs: pd.DataFrame,
-           val: dict, checks: list[tuple[bool, str]], nav: str = "", lang: str = "en") -> str:
+           val: dict, checks: list[tuple[bool, str]], nav: str = "", lang: str = "en",
+           price: dict | None = None, outlook: dict | None = None, saved_url=None) -> str:
     tr = translator(lang)
     last = q.dropna(subset=["eps"]).iloc[-1] if q["eps"].notna().any() else pd.Series(dtype=float)
     latest_q = q["eps"].last_valid_index() or "–"
@@ -210,6 +301,9 @@ def render(d: StockData, q: pd.DataFrame, rev: pd.DataFrame, divs: pd.DataFrame,
         for c in charts
     )
     title = f"{d.stock_id} {d.name}"
+    price_html, price_chart = _price_section(price, outlook, tr, saved_url)
+    if price_chart:
+        charts.append(price_chart)
 
     return _TEMPLATE.format(
         css=BASE_CSS,
@@ -226,7 +320,7 @@ def render(d: StockData, q: pd.DataFrame, rev: pd.DataFrame, divs: pd.DataFrame,
         quarter_table=_quarter_table(q, tr),
         dividend_table=_dividend_table(divs, tr),
         h_checks=tr("Quick checks"), h_trends=tr("Trends"), h_quarterly=tr("Quarterly detail"),
-        h_dividends=tr("Dividends"),
+        h_dividends=tr("Dividends"), h_price=tr("Price forecast"), price=price_html,
         footer=html.escape(tr("Data: FinMind (TWSE / TPEx / MOPS filings). Consolidated statements; TTM = trailing four quarters. 1 億 = NT$100,000,000. Generated {generated}. For research only — not investment advice.",
                               generated=datetime.now().strftime("%Y-%m-%d %H:%M"))),
         data=json.dumps(charts, ensure_ascii=False).replace("</", "<\\/"),
@@ -276,15 +370,39 @@ table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nu
 th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
 th[scope=row], thead th:first-child { text-align: left; color: var(--text-secondary); font-weight: 500; }
 thead th { color: var(--text-secondary); font-weight: 600; }
+.small { font-size: 12px; }
+.price { display: grid; gap: 12px; margin-top: 12px; }
+.price .plot { height: 240px; }
+.src { text-align: left !important; }
+.warn-note { margin: 12px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--surface-1);
+  border: 1px solid var(--border); border-left: 3px solid var(--critical); }
 footer { margin-top: 40px; font-size: 12px; color: var(--text-muted); }
 .nav { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 24px; }
 .nav a { color: var(--text-secondary); text-decoration: none; }
 .nav a:hover { color: var(--text-primary); }
 .nav form { display: flex; gap: 8px; margin-left: auto; }
-input, select, button { font: inherit; color: var(--text-primary); background: var(--surface-1);
+input, select, button, textarea { font: inherit; color: var(--text-primary); background: var(--surface-1);
   border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
 button { cursor: pointer; }
 button:hover { border-color: var(--text-secondary); }
+.nav .who { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+.nav .who + .lang, .nav form + .who { margin-left: 0; }
+.nav form.inline { margin-left: 0; display: inline; }
+form.inline { display: inline; margin: 0; }
+button.link { border: 0; background: none; padding: 0; color: var(--text-secondary); text-decoration: underline; }
+button.link:hover { color: var(--text-primary); }
+.badge { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 999px; font-size: 11px;
+  line-height: 18px; text-align: center; background: var(--critical); color: #fff; font-weight: 600; }
+#notices { display: contents; }
+.notice-pop { position: fixed; right: 20px; bottom: 20px; z-index: 50; width: min(380px, calc(100vw - 40px));
+  background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
+  border-left: 3px solid var(--good); border-radius: 10px; padding: 14px 16px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); animation: notice-in 0.25s ease-out; }
+.notice-pop ul { margin: 8px 0 12px; padding-left: 18px; }
+.notice-pop li { margin-bottom: 6px; }
+.notice-pop a { color: inherit; font-weight: 600; text-decoration: underline; }
+@keyframes notice-in { from { transform: translateY(12px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .notice-pop { animation: none; } }
 """
 
 
@@ -308,6 +426,9 @@ _TEMPLATE = """<!DOCTYPE html>
 
   <h2>{h_checks}</h2>
   <div class="panel">{notice}<ul class="checks">{checks}</ul></div>
+
+  <h2>{h_price}</h2>
+  {price}
 
   <h2>{h_trends}</h2>
   <div class="grid">{charts}</div>
@@ -340,6 +461,7 @@ function draw() {{
       else {{
         tr.line = {{ color, width: 2 }};
         tr.marker = {{ color, size: 8, line: {{ color: t.surface, width: 2 }} }};
+        if (tr.error_y) tr.error_y = {{ ...tr.error_y, color }};
       }}
       return tr;
     }});
