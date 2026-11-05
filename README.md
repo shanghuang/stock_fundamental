@@ -97,11 +97,14 @@ requests per hour allowed without a token.
 
 ## Accounts
 
-The web UI needs an account. Anyone who can reach the site can register at `/register`; the
+The web UI needs an account or a guest session. Anyone who can reach the site can register at `/register`; the
 **first account ever created becomes the admin**, so register yourself first after starting a new
 installation. Only admins can run Claude research (it bills your Anthropic account). Saved theme
 analyses are shared by everyone; each can be deleted by the person who ran it or by an admin.
 
+- **Guests**: **Continue as guest** on the sign-in page needs no account. Guests can read stock reports
+  and saved analyses, and a preset opens its newest saved run. They cannot start or re-run an analysis,
+  request a topic, or delete anything. The guest session ends when the browser closes.
 - **Account** page (click your name): change your password. This signs out your other sessions.
 - **Users** page (admins): make or remove admins, disable or enable accounts, reset a password (a
   temporary one is shown once), delete accounts. The last active admin cannot be removed.

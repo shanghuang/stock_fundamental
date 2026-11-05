@@ -41,7 +41,9 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.environ.get("TWF_SECURE_COOKIES") == "1",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
-PUBLIC_ENDPOINTS = {"login", "register", "static"}
+PUBLIC_ENDPOINTS = {"login", "login_guest", "register", "static"}
+# Guests can read stock reports and saved analyses, and nothing else.
+GUEST_ENDPOINTS = {"index", "report_query", "report_page", "themes", "theme_page", "saved_list", "saved_view"}
 MAX_FAILED_LOGINS, LOCKOUT_SECONDS = 5, 15 * 60
 _failed_logins: dict[str, list[float]] = {}
 
@@ -75,6 +77,10 @@ def _is_admin() -> bool:
     return bool(_user() and _user().is_admin)
 
 
+def _is_guest() -> bool:
+    return bool(_user() and _user().is_guest)
+
+
 def _csrf_token() -> str:
     if "csrf" not in session:
         session["csrf"] = secrets.token_urlsafe(24)
@@ -96,12 +102,16 @@ def _authenticate():
             g.user = u
         else:
             session.clear()
+    elif session.get("guest"):
+        g.user = users.GUEST
     if request.method == "POST" and not secrets.compare_digest(request.form.get("csrf", ""), session.get("csrf", "")):
         return _page(tr("Error"), f"<h1>{tr('This form has expired')}</h1><p class='muted'>"
                      f"{tr('Reload the page and try again.')}</p>", 400)
     if g.user is None and request.endpoint not in PUBLIC_ENDPOINTS:
         target = request.full_path.rstrip("?")
         return redirect(url_for("login", next=target) if target != "/" else url_for("login"))
+    if _is_guest() and request.endpoint and request.endpoint not in PUBLIC_ENDPOINTS | GUEST_ENDPOINTS:
+        return _forbidden(tr("Guests can read stock reports and saved analyses. Sign in or create an account to do more."))
     return None
 
 
@@ -109,6 +119,11 @@ def _sign_in(u: users.User) -> None:
     session.clear()  # drop anything set before sign-in, so a planted session cannot carry over
     session.permanent = True
     session.update(uid=u.id, sv=u.session_version, csrf=secrets.token_urlsafe(24))
+
+
+def _sign_in_guest() -> None:
+    session.clear()
+    session.update(guest=True, csrf=secrets.token_urlsafe(24))  # ends when the browser closes
 
 
 def _safe_next(target: str | None) -> str:
@@ -132,6 +147,9 @@ def _user_menu() -> str:
     u = _user()
     if u is None:
         return ""
+    if u.is_guest:
+        return (f"<span class='who'><span>{tr('Guest')}</span><a href='{url_for('login')}'>{tr('Sign in')}</a>"
+                f"<a href='{url_for('register')}'>{tr('Create account')}</a></span>")
     admin = ""
     if u.is_admin:
         n = wishlist.pending_count()
@@ -174,7 +192,7 @@ def _notice_pop(u: users.User, nxt: str) -> str:
 def _notices() -> str:
     """Pop-up for decided topic requests, checked every minute so it also appears on an open page."""
     u = _user()
-    if u is None:
+    if u is None or u.is_guest:
         return ""
     poll = (f"<script>(() => {{ const box = document.getElementById('notices'); if (!box || box.dataset.on) return;"
             f" box.dataset.on = 1; setInterval(async () => {{ if (document.hidden || box.firstChild) return;"
@@ -477,11 +495,19 @@ def themes():
         recent_html = (f"<h2>{tr('Recent analyses')}</h2>"
                        f"<p class='muted small'>{tr('Saved runs open instantly, without new data requests or Claude charges.')}</p>"
                        f"{_saved_table(saved[:RECENT_SAVED])}{more}")
-    body = f"""
+    head = f"""
 {_theme_nav()}
 <h1>{tr('Market themes')}</h1>
 <div class="meta">{tr('Compare the stocks in a theme and get a SWOT for each one')}</div>
+"""
+    if _is_guest():
+        return _page(tr("Market themes"), f"""{head}
+<div class="panel" style="margin-top:20px">{tr('As a guest you can open saved analyses. To start an analysis or request a topic, <a href="{login}">sign in</a> or <a href="{register}">create an account</a>.', login=url_for('login'), register=url_for('register'))}</div>
 
+<h2>{tr('Presets')}</h2>
+<div class="presets">{cards}</div>
+{recent_html}""")
+    body = f"""{head}
 <div class="panel options">
   <select id="days" aria-label="{tr('News window')}">{day_opts}</select>
   {llm_opt}
@@ -626,6 +652,11 @@ def theme_page():
     use_llm = want_llm and llm.available() and _is_admin()
 
     t = theme.make_theme(name, keywords or None, stocks or None, lang=_lang())
+    if _is_guest():  # reads only: the newest saved run of the theme, never a new one
+        latest = theme_store.latest_for(t.key, _lang())
+        if latest:
+            return _saved_response(latest["id"])
+        return _forbidden(tr("“{name}” has no saved analysis yet, and guests cannot start one.", name=name))
     if not t.stock_ids and not use_llm:
         return _no_stocks_page(name, keywords, days)
     refresh = request.args.get("refresh") == "1"
@@ -734,9 +765,9 @@ def _saved_response(rid: str, reused: bool = False, fulfilled: list[int] | None 
                time=_fmt_time(meta["created"]), hours=theme_store.MAX_AGE_HOURS) if reused
             else tr("Saved analysis from {time}.", time=_fmt_time(meta["created"])))
     # Rendered inside the report template, which has its own CSS, so style inline.
-    banner = (f"<div class='panel' style='margin-bottom:20px'>{html.escape(note)} "
-              f"<a href='{html.escape(rerun)}' style='color:inherit;font-weight:600;margin-left:4px'>"
-              f"{tr('Run again with fresh data')}</a></div>")
+    again = ("" if _is_guest() else f"<a href='{html.escape(rerun)}' style='color:inherit;font-weight:600;margin-left:4px'>"
+             f"{tr('Run again with fresh data')}</a>")
+    banner = f"<div class='panel' style='margin-bottom:20px'>{html.escape(note)} {again}</div>"
     html_doc = theme_report.render(result, nav=_theme_nav() + _fulfilled_banner(fulfilled or []) + banner,
                                    link=lambda sid: url_for("report_page", stock_id=sid))
     return Response(html_doc, mimetype="text/html")
@@ -812,13 +843,25 @@ def login():
   <label>{tr('Password')} <input type="password" name="password" required autocomplete="current-password"></label>
   <button type="submit">{tr('Sign in')}</button>
 </form>
-<p class="muted">{tr('No account yet?')} <a href="{url_for('register', next=nxt) if nxt else url_for('register')}">{tr('Create one')}</a></p>"""
+<p class="muted">{tr('No account yet?')} <a href="{url_for('register', next=nxt) if nxt else url_for('register')}">{tr('Create one')}</a></p>
+<form method="post" action="{url_for('login_guest')}" class="stack">{_csrf_field()}
+  <input type="hidden" name="next" value="{html.escape(nxt)}">
+  <button type="submit">{tr('Continue as guest')}</button>
+  <span class="small muted">{tr('Read stock reports and saved analyses. Guests cannot run analyses or request topics.')}</span>
+</form>"""
     return _auth_page(tr("Sign in"), form, error, 401 if error else 200)
+
+
+@app.post("/login/guest")
+def login_guest():
+    if _user() is None:
+        _sign_in_guest()
+    return redirect(_safe_next(request.form.get("next")), code=303)
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if _user():
+    if _user() and not _is_guest():
         return redirect(url_for("index"))
     nxt = request.values.get("next", "")
     error, username = "", ""

@@ -62,6 +62,12 @@ class User:
     session_version: int
     created: str
     last_login: str | None
+    is_guest: bool = False
+
+
+# Signed-in visitors without an account. Parentheses cannot appear in a real username, so a guest
+# never matches an account or the owner of a saved analysis.
+GUEST = User(0, "(guest)", False, True, 0, "", None, is_guest=True)
 
 
 def db_path() -> Path:

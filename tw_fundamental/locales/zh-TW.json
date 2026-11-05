@@ -467,5 +467,12 @@
   "theme outlook": "主題展望",
   "today’s {cur:.1f}× up to the 5-year 25th percentile": "目前 {cur:.1f}× 至 5 年第 25 百分位",
   "{annual} a year · close NT$ {close}": "年化 {annual} · 收盤價 NT$ {close}",
-  "{year} base case": "{year}基準情境"
+  "{year} base case": "{year}基準情境",
+
+  "Guests can read stock reports and saved analyses. Sign in or create an account to do more.": "訪客可閱讀個股報告與已儲存的分析。登入或建立帳號後可使用更多功能。",
+  "Guest": "訪客",
+  "As a guest you can open saved analyses. To start an analysis or request a topic, <a href=\"{login}\">sign in</a> or <a href=\"{register}\">create an account</a>.": "您以訪客身分瀏覽，可開啟已儲存的分析。若要執行分析或提出主題需求，請<a href=\"{login}\">登入</a>或<a href=\"{register}\">建立帳號</a>。",
+  "“{name}” has no saved analysis yet, and guests cannot start one.": "「{name}」尚無已儲存的分析，訪客無法執行新的分析。",
+  "Continue as guest": "以訪客身分繼續",
+  "Read stock reports and saved analyses. Guests cannot run analyses or request topics.": "可閱讀個股報告與已儲存的分析。訪客無法執行分析或提出主題需求。"
 }

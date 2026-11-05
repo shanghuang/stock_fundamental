@@ -1,9 +1,10 @@
 import re
+from types import SimpleNamespace
 
 import pytest
 
 from conftest import CSRF, sign_in
-from tw_fundamental import theme_store, users, web
+from tw_fundamental import theme, theme_store, users, web, wishlist
 from tw_fundamental.theme import StockProfile, Theme, ThemeResult
 
 
@@ -217,3 +218,69 @@ def test_admin_manages_users(anon):
 def test_first_request_loads_the_secret_key(anon, monkeypatch):
     monkeypatch.setattr(web.app, "secret_key", None)
     assert anon.get("/login").status_code == 200 and web.app.secret_key == users.secret_key()
+
+
+# --------------------------------------------------------------------------- guests
+
+@pytest.fixture
+def guest(anon, monkeypatch):
+    runs = []
+    monkeypatch.setattr(theme, "analyze", lambda *a, **k: runs.append(a) or pytest.fail("a guest started a run"))
+    anon.runs = runs
+    r = anon.post("/login/guest", data={"csrf": csrf_of(anon, "/login"), "next": "/themes"})
+    assert r.status_code == 303 and r.headers["Location"] == "/themes"
+    return anon
+
+
+def theme_run(title="cpo", lang="en"):
+    t = Theme(title, title.upper(), keywords=[title])
+    r = ThemeResult(t, [StockProfile("2330", "台積電")], {}, 3, lang=lang)
+    return theme_store.save(r, theme_store.params_key(t, 3, False, lang), {"name": title}, owner="alice")
+
+
+def test_guest_reads_reports_and_saved_analyses(guest, monkeypatch):
+    monkeypatch.setattr(web, "build_report", lambda sid, *a, **k: SimpleNamespace(html=f"report {sid}"))
+    rid = theme_run()
+    assert guest.get("/").status_code == 200
+    assert guest.get("/report/2330").get_data(as_text=True) == "report 2330"
+    assert guest.get("/themes/saved").status_code == 200
+    body = guest.get(f"/theme/saved/{rid}").get_data(as_text=True)
+    assert "Saved analysis from" in body and "Run again" not in body
+    body = guest.get("/theme?name=cpo").get_data(as_text=True)  # a preset opens its newest run
+    assert "Saved analysis from" in body
+
+
+def test_guest_cannot_request_or_run_analyses(guest):
+    theme_run()
+    body = guest.get("/themes").get_data(as_text=True)
+    assert "Guest" in body and 'action="/requests"' not in body and "id='custom'" not in body and 'id="custom"' not in body
+    assert "As a guest you can open saved analyses" in body
+    token = csrf_of(guest, "/login")
+    assert guest.post("/requests", data={"csrf": token, "topic": "Robots"}).status_code == 403
+    assert wishlist.list_requests() == []
+    assert guest.get("/theme?name=robots&stocks=2330").status_code == 403  # no saved run: not started
+    assert guest.get("/theme?name=memory&refresh=1").status_code == 403
+    assert guest.runs == []
+
+
+def test_guest_cannot_reach_account_or_admin_pages(guest):
+    rid = theme_run()
+    token = csrf_of(guest, "/login")
+    for path in ("/account", "/admin/users", "/admin/requests", "/requests/notices"):
+        assert guest.get(path).status_code == 403, path
+    assert guest.post(f"/theme/saved/{rid}/delete", data={"csrf": token}).status_code == 403
+    assert theme_store.get_meta(rid)
+
+
+def test_guest_can_then_sign_in_or_register(guest):
+    users.create("alice", "password123")
+    assert guest.get("/register").status_code == 200
+    r = guest.post("/login", data={"csrf": csrf_of(guest, "/login"), "username": "alice", "password": "password123"})
+    assert r.status_code == 303
+    assert "Sign out" in guest.get("/themes").get_data(as_text=True)
+
+
+def test_guest_session_needs_the_signed_cookie(anon):
+    assert anon.get("/themes").status_code == 302  # no guest flag, no entry
+    assert anon.post("/login/guest", data={"csrf": "wrong"}).status_code == 400
+    assert not users.USERNAME_RE.match(users.GUEST.username)  # cannot collide with an account
