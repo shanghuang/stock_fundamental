@@ -1,10 +1,11 @@
 import re
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
 
 from conftest import CSRF, sign_in
-from tw_fundamental import theme, theme_store, users, web, wishlist
+from tw_fundamental import activity, theme, theme_store, users, web, wishlist
 from tw_fundamental.theme import StockProfile, Theme, ThemeResult
 
 
@@ -95,7 +96,7 @@ def test_register_signs_in_and_first_user_is_admin(anon):
                                      "confirm": "password123", "next": "/themes"})
     assert r.status_code == 303 and r.headers["Location"] == "/themes"
     body = anon.get("/themes").get_data(as_text=True)
-    assert "first user, so your account is an admin" in body and ">alice</a>" in body and "/admin/users" in body
+    assert "first user, so your account is an admin" in body and ">alice</a>" in body and "href='/admin'" in body
 
 
 def test_register_errors(anon):
@@ -284,3 +285,116 @@ def test_guest_session_needs_the_signed_cookie(anon):
     assert anon.get("/themes").status_code == 302  # no guest flag, no entry
     assert anon.post("/login/guest", data={"csrf": "wrong"}).status_code == 400
     assert not users.USERNAME_RE.match(users.GUEST.username)  # cannot collide with an account
+
+
+# --------------------------------------------------------------------------- admin panel
+
+def test_old_database_gains_the_privileged_column(tmp_path, monkeypatch):
+    monkeypatch.setattr(users, "DATA_DIR", tmp_path / "old")
+    users.DATA_DIR.mkdir()
+    conn = sqlite3.connect(users.db_path())
+    conn.execute(users.SCHEMA.replace("  is_privileged INTEGER NOT NULL DEFAULT 0,\n", ""))
+    conn.execute("INSERT INTO users (username, password_hash, created) VALUES ('old', 'x', '2026-01-01')")
+    conn.commit()
+    conn.close()
+    assert users.get_by_name("old").is_privileged is False
+
+
+def test_role_changes_keep_one_role_and_one_admin():
+    admin, bob = users.create("admin", "password123"), users.create("bob", "password123")
+    users.set_privileged(bob.id, True)
+    assert users.get(bob.id).is_privileged and users.get(bob.id).has_admin_rights and not users.get(bob.id).is_admin
+    users.set_admin(bob.id, True)
+    assert users.get(bob.id).is_admin and not users.get(bob.id).is_privileged
+    users.set_privileged(bob.id, False)  # not a privileged user: leaves the admin role alone
+    assert users.get(bob.id).is_admin
+    users.set_privileged(bob.id, True)  # ends the admin role
+    assert not users.get(bob.id).is_admin
+    with pytest.raises(users.UserError, match="at least one active admin"):
+        users.set_privileged(admin.id, True)  # bob's rights do not replace the last admin
+    users.set_privileged(bob.id, False)
+    assert not users.get(bob.id).has_admin_rights
+
+
+def test_privileged_user_has_admin_rights(anon, monkeypatch):
+    monkeypatch.setattr(web.llm, "available", lambda: True)
+    used = []
+    monkeypatch.setattr(theme, "analyze", lambda t, news_days=3, use_llm=False, refresh=False, lang="en":
+                        used.append(use_llm) or ThemeResult(t, [StockProfile("2330", "台積電")], {}, news_days, lang=lang))
+    admin = users.create("admin", "password123")
+    amy = users.create("amy", "password123")
+    me = sign_in(anon, "bob", admin=False)
+    for path in ("/admin", "/admin/users", "/admin/activity", "/admin/requests"):
+        assert anon.get(path).status_code == 403, path
+    users.set_privileged(me.id, True)
+    for path in ("/admin", "/admin/users", "/admin/activity", "/admin/requests"):
+        assert anon.get(path).status_code == 200, path
+    assert "Admin panel" in anon.get("/themes").get_data(as_text=True)
+    assert "Privileged" in anon.get("/account").get_data(as_text=True)
+    anon.get("/theme?name=cpo&llm=1")
+    assert used == [True]  # Claude
+    mine = saved_run("admin")
+    assert anon.post(f"/theme/saved/{mine}/delete", data={"csrf": CSRF}).status_code == 303
+    anon.post(f"/admin/users/{amy.id}/grant-privileged", data={"csrf": CSRF})
+    assert users.get(amy.id).is_privileged
+    anon.post(f"/admin/users/{amy.id}/disable", data={"csrf": CSRF})
+    assert not users.get(amy.id).is_active
+    assert users.get(admin.id).is_admin
+
+
+def test_users_page_lists_everyone_with_roles_and_actions(anon):
+    sign_in(anon, "admin", admin=True)
+    bob, amy = users.create("bob", "password123"), users.create("amy", "password123")
+    users.set_privileged(bob.id, True)
+    body = anon.get("/admin/users").get_data(as_text=True)
+    assert all(n in body for n in ("admin", "bob", "amy", "Privileged", "Make privileged", "Remove privileges"))
+    assert f"/admin/activity?user={amy.id}" in body
+    r = anon.post(f"/admin/users/{amy.id}/grant-privileged", data={"csrf": CSRF}, follow_redirects=True)
+    assert "amy is now a privileged user" in r.get_data(as_text=True)
+    anon.post(f"/admin/users/{amy.id}/revoke-privileged", data={"csrf": CSRF})
+    assert not users.get(amy.id).is_privileged
+
+
+def test_activity_records_what_users_do(anon, monkeypatch):
+    monkeypatch.setattr(web, "build_report", lambda sid, *a, **k: SimpleNamespace(html="report"))
+    bob = users.create("bob", "password123", is_admin=False)
+    token = csrf_of(anon, "/login")
+    anon.post("/login", data={"csrf": token, "username": "bob", "password": "wrong-password"})
+    anon.post("/login", data={"csrf": token, "username": "typo-secret", "password": "x"})
+    anon.post("/login", data={"csrf": token, "username": "bob", "password": "password123"})
+    anon.get("/report/2330")
+    token = csrf_of(anon, "/themes")
+    anon.post("/requests", data={"csrf": token, "topic": "Robots"})
+    anon.post("/logout", data={"csrf": token})
+    assert [(e.action, e.detail) for e in reversed(activity.recent(bob.id))] == [
+        ("sign-in-failed", ""), ("sign-in", ""), ("view-report", "2330"), ("request-topic", "Robots"), ("sign-out", "")]
+    assert "typo-secret" not in str(activity.recent())
+
+
+def test_activity_page_filters_and_pages(anon, monkeypatch):
+    sign_in(anon, "admin", admin=True)
+    bob, amy = users.create("bob", "password123"), users.create("amy", "password123")
+    monkeypatch.setattr(activity, "PAGE_SIZE", 2)
+    for i in range(3):
+        activity.log(bob, "view-report", f"100{i}")
+    activity.log(amy, "sign-in")
+    activity.log(users.GUEST, "guest")
+    body = anon.get("/admin").get_data(as_text=True)
+    assert "Latest activity" in body and "Continued as guest" in body
+    body = anon.get(f"/admin/activity?user={bob.id}").get_data(as_text=True)
+    assert "1002" in body and "1001" in body and "1000" not in body and "amy</a>" not in body
+    older = re.search(r"href='(/admin/activity\?[^']*before=\d+)'", body).group(1)
+    assert "1000" in anon.get(older.replace("&amp;", "&")).get_data(as_text=True)
+    body = anon.get("/admin/activity?action=guest").get_data(as_text=True)
+    assert "Continued as guest" in body and "1002" not in body
+    assert "<img" not in anon.get("/admin/activity?action=<img>").get_data(as_text=True)  # unknown action: ignored
+
+
+def test_deleted_users_history_stays_but_is_not_inherited(anon):
+    sign_in(anon, "admin", admin=True)
+    bob = users.create("bob", "password123")
+    activity.log(bob, "sign-in")
+    anon.post(f"/admin/users/{bob.id}/delete", data={"csrf": CSRF})
+    again = users.create("bob", "password123")
+    assert activity.recent(again.id) == []
+    assert "bob (deleted)" in anon.get("/admin/activity").get_data(as_text=True)

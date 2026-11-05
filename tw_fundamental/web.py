@@ -21,7 +21,7 @@ from .finmind import FinMindError
 from .i18n import DEFAULT_LANG, HTML_LANG, LANGS, normalize, translator
 from .pipeline import STOCK_ID_RE, build_report, list_stocks
 from .report import BASE_CSS, tr_market
-from . import llm, theme, theme_report, theme_store, users, wishlist
+from . import activity, llm, theme, theme_report, theme_store, users, wishlist
 
 class _SessionInterface(SecureCookieSessionInterface):
     """Loads the signing key on first use; Flask opens the session before any before_request hook runs."""
@@ -74,11 +74,16 @@ def _user() -> users.User | None:
 
 
 def _is_admin() -> bool:
-    return bool(_user() and _user().is_admin)
+    """Has admin rights: admins, and privileged users, who have the same rights."""
+    return bool(_user() and _user().has_admin_rights)
 
 
 def _is_guest() -> bool:
     return bool(_user() and _user().is_guest)
+
+
+def _log(action: str, detail: str = "") -> None:
+    activity.log(_user(), action, detail)
 
 
 def _csrf_token() -> str:
@@ -151,11 +156,10 @@ def _user_menu() -> str:
         return (f"<span class='who'><span>{tr('Guest')}</span><a href='{url_for('login')}'>{tr('Sign in')}</a>"
                 f"<a href='{url_for('register')}'>{tr('Create account')}</a></span>")
     admin = ""
-    if u.is_admin:
+    if u.has_admin_rights:
         n = wishlist.pending_count()
         badge = f" <span class='badge'>{n}</span>" if n else ""
-        admin = (f"<a href='{url_for('admin_requests')}'>{tr('Requests')}{badge}</a>"
-                 f"<a href='{url_for('admin_users')}'>{tr('Users')}</a>")
+        admin = f"<a href='{url_for('admin_panel')}'>{tr('Admin panel')}{badge}</a>"
     return (f"<span class='who'><a href='{url_for('account')}' title='{tr('Account')}'>{html.escape(u.username)}</a>"
             f"{admin}<form method='post' action='{url_for('logout')}' class='inline'>{_csrf_field()}"
             f"<button type='submit' class='link'>{tr('Sign out')}</button></form></span>")
@@ -462,6 +466,7 @@ def report_page(stock_id: str):
         return _error(stock_id, years, str(e), 404 if "Unknown stock" in str(e) else 502)
     if request.args.get("refresh") == "1":
         return redirect(url_for("report_page", stock_id=stock_id, years=years))
+    _log("view-report", stock_id)
     return Response(r.html, mimetype="text/html")
 
 
@@ -600,13 +605,16 @@ def request_submit():
     except users.UserError as e:
         flash(_user_error(e), "error")
     else:
+        _log("request-topic", r.topic)
         flash(tr("Request for “{topic}” sent. You will be notified when an admin decides.", topic=r.topic), "ok")
     return redirect(url_for("themes", _anchor="requests"), code=303)
 
 
 @app.post("/requests/<int:req_id>/withdraw")
 def request_withdraw(req_id: int):
+    r = wishlist.get(req_id)
     if wishlist.withdraw(_user().id, req_id):
+        _log("withdraw-request", r.topic)
         flash(tr("Request withdrawn."), "ok")
     return redirect(url_for("themes", _anchor="requests"), code=303)
 
@@ -675,6 +683,7 @@ def theme_page():
         result.llm_error = (tr("Claude research is available to admins only") if not _is_admin()
                             else tr("no Claude credentials found (set ANTHROPIC_API_KEY)"))
     rid = theme_store.save(result, key, query, owner=_user().username)
+    _log("run-theme", f"{t.title} · Claude" if use_llm else t.title)
     html_doc = theme_report.render(result, nav=nav + _fulfilled_banner(_fulfill_request(rid, t)),
                                    link=lambda sid: url_for("report_page", stock_id=sid))
     return Response(html_doc, mimetype="text/html")
@@ -759,6 +768,7 @@ def _saved_response(rid: str, reused: bool = False, fulfilled: list[int] | None 
     if loaded is None:
         return _page(tr("Not found"), f"{_theme_nav()}<h1>{tr('Saved analysis not found')}</h1>", 404)
     meta, result = loaded
+    _log("view-saved", meta["title"])
     query = {k: v for k, v in meta.get("query", {}).items() if v not in ("", None)}
     rerun = url_for("theme_page", **query, lang=result.lang, rerun=1)
     note = (tr("Showing the saved run from {time}, because the same analysis ran less than {hours} hours ago.",
@@ -796,6 +806,7 @@ def saved_delete(rid: str):
     if not (_is_admin() or meta.get("owner", "").lower() == _user().username.lower()):
         return _forbidden(tr("Only the person who ran an analysis, or an admin, can delete it."))
     theme_store.delete(rid)
+    _log("delete-saved", meta.get("title", rid))
     return redirect(url_for("saved_list"), code=303)
 
 
@@ -833,9 +844,13 @@ def login():
             u = users.authenticate(username, request.form.get("password", ""))
             if u:
                 _sign_in(u)
+                activity.log(u, "sign-in")
                 return redirect(_safe_next(nxt), code=303)
             for k in keys:
                 _failed_logins.setdefault(k, []).append(time.time())
+            known = users.get_by_name(username)  # never log unknown names: one could be a mistyped password
+            if known:
+                activity.log(known, "sign-in-failed")
             error = tr("Wrong username or password, or the account is disabled.")
     form = f"""<form method="post" class="stack">{_csrf_field()}
   <input type="hidden" name="next" value="{html.escape(nxt)}">
@@ -856,6 +871,7 @@ def login():
 def login_guest():
     if _user() is None:
         _sign_in_guest()
+        activity.log(users.GUEST, "guest")
     return redirect(_safe_next(request.form.get("next")), code=303)
 
 
@@ -878,6 +894,7 @@ def register():
             else:
                 users.record_login(u.id)
                 _sign_in(u)
+                activity.log(u, "register")
                 flash(tr("Welcome, {name}. You are the first user, so your account is an admin.", name=u.username)
                       if u.is_admin else tr("Welcome, {name}.", name=u.username), "ok")
                 return redirect(_safe_next(nxt), code=303)
@@ -898,6 +915,8 @@ def register():
 
 @app.post("/logout")
 def logout():
+    if _user():
+        _log("sign-out")
     session.clear()
     return redirect(url_for("login"), code=303)
 
@@ -917,15 +936,15 @@ def account():
                 error = _user_error(e)
             else:
                 _sign_in(users.get(u.id))  # keep this session; others were signed out
+                activity.log(u, "change-password")
                 flash(tr("Password changed. Your other sessions were signed out."), "ok")
                 return redirect(url_for("account"), code=303)
-    role = tr("Admin") if u.is_admin else tr("User")
     mine = sum(1 for m in theme_store.list_saved() if m.get("owner", "").lower() == u.username.lower())
     err = f"<div class='flash error'>{html.escape(error)}</div>" if error else ""
     body = f"""{_theme_nav()}<h1>{tr('Account')}</h1>
 <div class="panel" style="margin-top:20px"><table class="kv">
   <tr><th scope="row">{tr('Username')}</th><td>{html.escape(u.username)}</td></tr>
-  <tr><th scope="row">{tr('Role')}</th><td>{role}{'' if u.is_admin else ' · ' + tr('Claude research is available to admins only')}</td></tr>
+  <tr><th scope="row">{tr('Role')}</th><td>{_role(u)}{'' if u.has_admin_rights else ' · ' + tr('Claude research is available to admins only')}</td></tr>
   <tr><th scope="row">{tr('Created')}</th><td>{_fmt_time(u.created)}</td></tr>
   <tr><th scope="row">{tr('Last sign-in')}</th><td>{_fmt_time(u.last_login or '') or '–'}</td></tr>
   <tr><th scope="row">{tr('Saved analyses')}</th><td>{mine}</td></tr>
@@ -940,7 +959,88 @@ def account():
     return _page(tr("Account"), body, 400 if error else 200)
 
 
-ADMIN_ACTIONS = ("grant-admin", "revoke-admin", "disable", "enable", "reset-password", "delete")
+ADMIN_ACTIONS = ("grant-admin", "revoke-admin", "grant-privileged", "revoke-privileged", "disable", "enable",
+                 "reset-password", "delete")
+
+
+def _role(u: users.User) -> str:
+    return tr("Admin") if u.is_admin else tr("Privileged") if u.is_privileged else tr("User")
+
+
+def _admin_tabs(current: str) -> str:
+    tabs = (("admin_panel", tr("Overview")), ("admin_users", tr("Users")), ("admin_activity", tr("Activity")),
+            ("admin_requests", tr("Requests")))
+    links = "".join(f"<a href='{url_for(ep)}'{' class=on aria-current=page' if ep == current else ''}>{label}</a>"
+                    for ep, label in tabs)
+    return f"{_theme_nav()}<h1>{tr('Admin panel')}</h1><nav class='tabs'>{links}</nav>"
+
+
+def _activity_table(entries: list[activity.Entry]) -> str:
+    def who(e: activity.Entry) -> str:
+        name = tr("Guest") if e.user_id == users.GUEST.id else e.username
+        if e.user_id < 0:  # a deleted account
+            return html.escape(name)
+        return f"<a href='{url_for('admin_activity', user=e.user_id)}'>{html.escape(name)}</a>"
+
+    rows = "".join(
+        f"<tr><td>{_fmt_time(e.created)}</td><td>{who(e)}</td>"
+        f"<td>{tr(activity.ACTIONS[e.action]) if e.action in activity.ACTIONS else html.escape(e.action)}</td>"
+        f"<td>{html.escape(e.detail)}</td></tr>" for e in entries)
+    head = "".join(f"<th>{h}</th>" for h in (tr("Time"), tr("Username"), tr("Action"), tr("Details")))
+    return (f"<div class='panel scroll'><table id='activity'><thead><tr>{head}</tr></thead>"
+            f"<tbody>{rows}</tbody></table></div>")
+
+
+@app.get("/admin")
+def admin_panel():
+    if not _is_admin():
+        return _forbidden(tr("This page is for admins."))
+    everyone = users.list_users()
+
+    def tile(label: str, n: int, ep: str) -> str:
+        return (f"<a class='tile' href='{url_for(ep)}'><div class='tile-label'>{label}</div>"
+                f"<div class='tile-value'>{n}</div></a>")
+
+    tiles = "".join([
+        tile(tr("Users"), len(everyone), "admin_users"),
+        tile(tr("Admins"), sum(u.is_admin for u in everyone), "admin_users"),
+        tile(tr("Privileged users"), sum(u.is_privileged for u in everyone), "admin_users"),
+        tile(tr("Active in the last 7 days"), activity.active_users(7), "admin_activity"),
+        tile(tr("Requests waiting"), wishlist.pending_count(), "admin_requests"),
+    ])
+    latest = activity.recent(limit=15)
+    table = _activity_table(latest) if latest else f"<p class='muted'>{tr('No activity yet.')}</p>"
+    return _page(tr("Admin panel"), f"{_admin_tabs('admin_panel')}<div class='tiles'>{tiles}</div>"
+                 f"<h2>{tr('Latest activity')}</h2>{table}"
+                 f"<p><a href='{url_for('admin_activity')}'>{tr('All activity')} →</a></p>")
+
+
+@app.get("/admin/activity")
+def admin_activity():
+    if not _is_admin():
+        return _forbidden(tr("This page is for admins."))
+    user_id = request.args.get("user", type=int)
+    action = request.args.get("action") if request.args.get("action") in activity.ACTIONS else None
+    before = request.args.get("before", type=int)
+    entries = activity.recent(user_id, action, before, activity.PAGE_SIZE)
+    user_opts = "".join(
+        f"<option value='{i}'{' selected' if i == user_id else ''}>{html.escape(name)}</option>"
+        for i, name in [(u.id, u.username) for u in users.list_users()] + [(users.GUEST.id, tr("Guest"))])
+    action_opts = "".join(f"<option value='{k}'{' selected' if k == action else ''}>{tr(v)}</option>"
+                          for k, v in activity.ACTIONS.items())
+    form = f"""<form class="panel filters" method="get">
+  <label>{tr('Username')} <select name="user"><option value="">{tr('Everyone')}</option>{user_opts}</select></label>
+  <label>{tr('Action')} <select name="action"><option value="">{tr('All actions')}</option>{action_opts}</select></label>
+  <button type="submit">{tr('Show')}</button>
+</form>"""
+    table = _activity_table(entries) if entries else f"<p class='muted'>{tr('No matching activity.')}</p>"
+    older = ""
+    if len(entries) == activity.PAGE_SIZE:
+        args = {k: v for k, v in (("user", user_id), ("action", action)) if v is not None}
+        older = f"<p><a href='{url_for('admin_activity', **args, before=entries[-1].id)}'>{tr('Older')} →</a></p>"
+    note = tr("Sign-ins, reports and analyses opened, and admin actions from the last {n} days. Guests share one "
+              "identity. IP addresses are not stored.", n=activity.KEEP_DAYS)
+    return _page(tr("Activity"), f"{_admin_tabs('admin_activity')}<p class='muted small'>{note}</p>{form}{table}{older}")
 
 
 @app.get("/admin/users")
@@ -962,8 +1062,16 @@ def admin_users():
         if u.id == me.id:
             actions = f"<span class='muted small'>{tr('(you)')}</span>"
         else:
+            if u.is_admin:
+                roles = [button(u, "revoke-admin", tr("Remove admin")),
+                         button(u, "grant-privileged", tr("Make privileged"))]
+            elif u.is_privileged:
+                roles = [button(u, "revoke-privileged", tr("Remove privileges")),
+                         button(u, "grant-admin", tr("Make admin"))]
+            else:
+                roles = [button(u, "grant-privileged", tr("Make privileged")), button(u, "grant-admin", tr("Make admin"))]
             actions = " · ".join([
-                button(u, "revoke-admin", tr("Remove admin")) if u.is_admin else button(u, "grant-admin", tr("Make admin")),
+                *roles,
                 button(u, "disable", tr("Disable")) if u.is_active else button(u, "enable", tr("Enable")),
                 button(u, "reset-password", tr("Reset password"),
                        tr("Give {name} a new temporary password?", name=u.username)),
@@ -971,14 +1079,15 @@ def admin_users():
                                                        name=u.username)),
             ])
         rows.append(
-            f"<tr><td><b>{html.escape(u.username)}</b></td><td>{tr('Admin') if u.is_admin else tr('User')}</td>"
+            f"<tr><td><b>{html.escape(u.username)}</b></td><td>{_role(u)}</td>"
             f"<td>{tr('Active') if u.is_active else tr('Disabled')}</td><td>{_fmt_time(u.created)}</td>"
             f"<td>{_fmt_time(u.last_login or '') or '–'}</td><td>{counts.get(u.username.lower(), 0)}</td>"
+            f"<td><a href='{url_for('admin_activity', user=u.id)}'>{tr('Activity')}</a></td>"
             f"<td>{actions}</td></tr>")
     head = "".join(f"<th>{h}</th>" for h in (tr("Username"), tr("Role"), tr("Status"), tr("Created"),
-                                              tr("Last sign-in"), tr("Saved analyses"), ""))
-    body = (f"{_theme_nav()}<h1>{tr('Users')}</h1>"
-            f"<div class='meta'>{tr('Anyone can create an account. Admins can run Claude research and manage users.')}</div>"
+                                              tr("Last sign-in"), tr("Saved analyses"), tr("Activity"), ""))
+    body = (f"{_admin_tabs('admin_users')}"
+            f"<div class='meta'>{tr('Anyone can create an account. Admins and privileged users have the same rights: they can run Claude research and manage users.')}</div>"
             f"<div class='panel scroll' style='margin-top:20px'><table id='users'><thead><tr>{head}</tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>")
     return _page(tr("Users"), body)
@@ -1002,6 +1111,12 @@ def admin_action(user_id: int, action: str):
         elif action == "revoke-admin":
             users.set_admin(user_id, False)
             flash(tr("{name} is no longer an admin.", name=name), "ok")
+        elif action == "grant-privileged":
+            users.set_privileged(user_id, True)
+            flash(tr("{name} is now a privileged user, with the same rights as an admin.", name=name), "ok")
+        elif action == "revoke-privileged":
+            users.set_privileged(user_id, False)
+            flash(tr("{name} is no longer a privileged user.", name=name), "ok")
         elif action == "disable":
             users.set_active(user_id, False)
             flash(tr("{name} is disabled and signed out.", name=name), "ok")
@@ -1015,6 +1130,7 @@ def admin_action(user_id: int, action: str):
         elif action == "delete":
             users.delete(user_id)
             flash(tr("Deleted the account {name}.", name=name), "ok")
+        _log(action, name)
     except users.UserError as e:
         flash(_user_error(e), "error")
     return redirect(url_for("admin_users"), code=303)
@@ -1064,7 +1180,7 @@ def admin_requests():
                                               tr("Admin")))
     history = (f"<h2>{tr('Recently decided')}</h2><div class='panel scroll'><table id='requests-done'>"
                f"<thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>") if rows else ""
-    body = f"""{_theme_nav()}<h1>{tr('Topic requests')}</h1>
+    body = f"""{_admin_tabs('admin_requests')}
 <div class="meta">{tr('Run a requested topic to notify everyone who asked for it, or decline it.')}</div>
 <div class="requests">{pending}</div>
 {history}
@@ -1083,6 +1199,7 @@ def admin_request_decline(req_id: int):
         return _forbidden(tr("This page is for admins."))
     ids = wishlist.decline(req_id, _user().username, request.form.get("reply", ""))
     if ids:
+        _log("decline-request", wishlist.get(req_id).topic)
         flash(tr("Declined “{topic}”; the requesters will be notified.", topic=wishlist.get(req_id).topic), "ok")
     else:
         flash(tr("That request was already decided."), "error")
@@ -1095,6 +1212,16 @@ def _error(stock_id: str, years: int, message: str, status: int) -> Response:
 
 
 _INDEX_CSS = """
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 12px 0 20px; border-bottom: 1px solid var(--border); }
+.tabs a { padding: 6px 12px; color: var(--text-secondary); text-decoration: none; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; }
+.tabs a:hover { color: var(--text-primary); }
+.tabs a.on { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--text-primary); }
+a.tile { color: inherit; text-decoration: none; }
+a.tile:hover { border-color: var(--text-secondary); }
+#activity td, #activity th { text-align: left; white-space: normal; }
+#activity td:first-child { white-space: nowrap; }
+form.filters { align-items: end; margin-bottom: 12px; }
 .search { margin-top: 20px; display: grid; gap: 12px; }
 .search input[type=search] { font-size: 18px; padding: 10px 14px; width: 100%; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }

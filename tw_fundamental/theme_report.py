@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Callable
 
 from .i18n import HTML_LANG, N_, Translator, normalize, translator
-from .report import BASE_CSS
+from .report import BASE_CSS, price_formula, price_steps
 from .theme import StockProfile, ThemeResult
 
 STAGE_LABELS = {"upstream": N_("Upstream"), "midstream": N_("Midstream"), "downstream": N_("Downstream"),
@@ -468,8 +468,12 @@ def _price_forecast(ok: list[StockProfile], link, tr: Translator) -> tuple[str, 
         note_peak = tr("{n} of {total} companies trade below their usual P/E (⚠): treat their implied prices "
                        "with extra caution.", n=len(peaks), total=len(have))
         note += " " + note_peak
+    how = "".join(f"<details class='how'><summary><b>{_e(_label(p))}</b> · {_e(price_formula(p.price, tr))}</summary>"
+                  f"{price_steps(p.price, tr)}</details>" for p in sorted(have, key=lambda p: -p.price["upside"]))
     table = (f"<p class='muted small'>{_e(note)}</p><div class='panel scroll'><table><thead><tr>{head}</tr></thead>"
-             f"<tbody>{''.join(rows)}</tbody></table></div>{skipped}")
+             f"<tbody>{''.join(rows)}</tbody></table></div>{skipped}"
+             f"<h3 style='margin:16px 0 8px'>{tr('How each price is calculated')}</h3>"
+             f"<div class='panel'>{how}</div>")
 
     pts = sorted(have, key=lambda p: p.price["upside"])
     chart = {"y": [_label(p) for p in pts],
