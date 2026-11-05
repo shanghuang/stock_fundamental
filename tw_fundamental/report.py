@@ -171,6 +171,67 @@ def _dividend_table(divs: pd.DataFrame, tr: Translator) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>"
 
 
+def price_formula(price: dict, tr: Translator) -> str:
+    """One line: the final year's base price as EPS × P/E."""
+    y, pe = price["years"][-1], price["pe"]
+    if pd.isna(y["base"]):
+        return tr("{year}: EPS {eps} is not positive, so there is no implied price",
+                  year=tr("FY{year}", year=y["year"]), eps=_num(y["eps"]))
+    return tr("{year} base NT$ {price} = EPS {eps} × P/E {pe}×", year=tr("FY{year}", year=y["year"]),
+              price=_num(y["base"], 0), eps=_num(y["eps"]), pe=_num(pe["base"]))
+
+
+def _pe_step(pe: dict, tr: Translator) -> str:
+    """Where the three P/E multiples come from."""
+    low, base, high = _num(pe["low"]), _num(pe["base"]), _num(pe["high"])
+    if pe["basis"] == "group":
+        return tr("P/E {pe}× for all three cases: the group median, because the stock has no P/E history.", pe=base)
+    if pe["basis"] == "below":
+        return tr("P/E: low and base {cur}× (today’s P/E, below its usual band), high {high}× (its 5-year 25th "
+                  "percentile).", cur=base, high=high)
+    if abs(pe["high"] - 2 * pe["base"]) < 1e-9:
+        return tr("P/E: low {low}× (5-year 25th percentile), base {base}× (median), high {high}× (twice the "
+                  "median, because the 75th percentile is higher).", low=low, base=base, high=high)
+    return tr("P/E: low {low}× (5-year 25th percentile), base {base}× (median), high {high}× (75th percentile).",
+              low=low, base=base, high=high)
+
+
+def _eps_step(y: dict, first: bool, tr: Translator) -> str:
+    """How one fiscal year's EPS was reached."""
+    eps, g = _num(y["eps"]), _pct(y["growth"], True)
+    if y["source"] == "analyst":
+        ref = f" ({y['ref']})" if y.get("ref") else ""
+        return tr("EPS {eps}: analysts’ estimate{ref}.", eps=eps, ref=ref)
+    start = _num(y["eps"] / (1 + y["growth"]))
+    if y["source"] == "extrapolated":
+        return tr("EPS {eps} = latest EPS {start} × (1 {g}): revenue growth over the last 3 months, limited to "
+                  "−50%…+100%.", eps=eps, start=start, g=g)
+    if first:
+        return tr("EPS {eps} = latest EPS {start} × (1 {g}): outlook growth.", eps=eps, start=start, g=g)
+    return tr("EPS {eps} = previous year’s EPS {start} × (1 {g}): outlook growth.", eps=eps, start=start, g=g)
+
+
+def price_steps(price: dict, tr: Translator) -> str:
+    """The calculation behind every implied price, step by step."""
+    e, pe, years = html.escape, price["pe"], price["years"]
+    items = [f"<li>{e(_pe_step(pe, tr))}</li>"]
+    for i, y in enumerate(years):
+        if pd.isna(y["base"]):
+            prices = tr("EPS is not positive, so there is no implied price.")
+        else:
+            prices = tr("Low {eps} × {low} = {p_low}; base {eps} × {base} = {p_base}; high {eps} × {high} = {p_high}.",
+                        eps=_num(y["eps"]), low=_num(pe["low"]), base=_num(pe["base"]), high=_num(pe["high"]),
+                        p_low=_num(y["low"], 0), p_base=_num(y["base"], 0), p_high=_num(y["high"], 0))
+        items.append(f"<li><b>{e(tr('FY{year}', year=y['year']))}</b> {e(_eps_step(y, i == 0, tr))} {e(prices)}</li>")
+    fin = years[-1]
+    if not pd.isna(fin["base"]) and "years_ahead" in price:
+        items.append("<li>" + e(tr("Base vs close: {base} ÷ {close} − 1 = {up}, or {annual} a year over {n:.1f} years.",
+                                   base=_num(fin["base"], 0), close=_num(price["close"], 1),
+                                   up=_pct(price["upside"], True), annual=_pct(price["annual"], True),
+                                   n=price["years_ahead"])) + "</li>")
+    return f"<ul class='steps'>{''.join(items)}</ul>"
+
+
 def _price_section(price: dict | None, outlook: dict | None, tr: Translator,
                    saved_url=None) -> tuple[str, dict | None]:
     """Implied prices from the EPS path × the stock's own P/E band (see forecast.price_forecast)."""
@@ -254,6 +315,7 @@ def _price_section(price: dict | None, outlook: dict | None, tr: Translator,
     body = (f"<div class='tiles'>{tiles}</div>{warn}"
             f"<div class='price'><div class='panel scroll'><table><thead><tr>{head}</tr></thead>"
             f"<tbody>{rows}</tbody></table></div>"
+            f"<div class='panel'><h3>{e(tr('How each price is calculated'))}</h3>{price_steps(price, tr)}</div>"
             f"<section class='chart'><h3>{e(tr('Implied price by fiscal year'))}</h3>"
             f"<div class='unit'>{e(tr('NT$ · dot = median P/E, bar = P/E band, dotted line = latest close'))}</div>"
             f"<div id='c_price' class='plot'></div></section></div>"
@@ -374,6 +436,11 @@ thead th { color: var(--text-secondary); font-weight: 600; }
 .price { display: grid; gap: 12px; margin-top: 12px; }
 .price .plot { height: 240px; }
 .src { text-align: left !important; }
+.steps { margin: 8px 0 0; padding-left: 18px; }
+.steps li { margin-bottom: 4px; }
+details.how { padding: 6px 0; border-bottom: 1px solid var(--border); }
+details.how:last-child { border-bottom: 0; }
+details.how summary { cursor: pointer; }
 .warn-note { margin: 12px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--surface-1);
   border: 1px solid var(--border); border-left: 3px solid var(--critical); }
 footer { margin-top: 40px; font-size: 12px; color: var(--text-muted); }

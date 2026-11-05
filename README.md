@@ -83,6 +83,8 @@ A **market outlook** covers the next six years, and **forward valuation** shows 
   - The report shows each year's EPS, the final year's low, base and high prices, and the base
     case's change from the latest close, in total and annualized. Prices exclude dividends. They
     are scenarios, not price targets.
+  - **How each price is calculated** spells out the arithmetic for every stock: where each P/E comes
+    from, each year's EPS step, and EPS × P/E for the low, base and high prices. Click a stock to expand it.
 
 **Saved analyses.** Every theme run (web or command line) is saved in `.cache/themes/`, and the newest
 200 are kept. Repeating the same analysis (same theme, keywords, stocks, news window, Claude setting
@@ -106,8 +108,15 @@ analyses are shared by everyone; each can be deleted by the person who ran it or
   and saved analyses, and a preset opens its newest saved run. They cannot start or re-run an analysis,
   request a topic, or delete anything. The guest session ends when the browser closes.
 - **Account** page (click your name): change your password. This signs out your other sessions.
-- **Users** page (admins): make or remove admins, disable or enable accounts, reset a password (a
-  temporary one is shown once), delete accounts. The last active admin cannot be removed.
+- **Admin panel** (`/admin`, for admins and privileged users): an overview, Users, Activity and Requests.
+  - **Users**: every account, with its role and status. Make a user privileged or an admin, remove those
+    roles, disable or enable accounts, reset a password (a temporary one is shown once), delete accounts.
+    The last active admin cannot be removed.
+  - **Privileged users** have the same rights as admins, including this panel: they can run Claude,
+    manage users (admins too), and read activity.
+  - **Activity**: sign-ins, stock reports and analyses opened, analyses run, topic requests and admin
+    actions, filterable by user and action. Entries are kept for 180 days. Guests appear as one identity.
+    IP addresses are not stored. A deleted account's history is kept and labeled as deleted.
 - Accounts are stored in `data/users.db` (set `TWF_DATA_DIR` to move it), with salted scrypt password
   hashes. `data/secret_key` signs the session cookie; set `TWF_SECRET_KEY` instead if you prefer.
   Back up `data/`; it is not in git.
@@ -129,6 +138,7 @@ From the command line:
 .venv/bin/python -m tw_fundamental.users create alice --admin   # asks for a password
 .venv/bin/python -m tw_fundamental.users reset-password alice
 .venv/bin/python -m tw_fundamental.users set-admin alice on
+.venv/bin/python -m tw_fundamental.users set-privileged alice on
 ```
 
 ## Languages
@@ -175,6 +185,7 @@ This prints a summary to the terminal and writes `reports/<id>.html`, which incl
 | `tw_fundamental/theme.py` | Theme analysis: profiles, headline filtering, rule-based SWOT, CLI |
 | `tw_fundamental/llm.py` | Optional Claude layer: web research, market forecast and per-stock SWOT |
 | `tw_fundamental/users.py` | Accounts: registration, sign-in, roles, admin actions, CLI |
+| `tw_fundamental/activity.py` | Activity log for the admin panel |
 | `tw_fundamental/wishlist.py` | Topic requests: submit, fulfill or decline, notifications |
 | `tw_fundamental/theme_store.py` | Saved theme analyses: save, reuse, list, delete |
 | `tw_fundamental/forecast.py` | Six-year market outlook (Claude or extrapolated), forward P/E, implied prices |

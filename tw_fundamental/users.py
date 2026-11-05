@@ -3,12 +3,13 @@
 Accounts live in an SQLite database under DATA_DIR (default ./data, or $TWF_DATA_DIR), kept
 apart from .cache so clearing the cache does not delete them. Passwords are stored as salted
 scrypt hashes (werkzeug). The first account ever created becomes an admin; admins can run
-Claude research and manage other users.
+Claude research and manage other users, and privileged users have the same rights.
 
     python -m tw_fundamental.users list
     python -m tw_fundamental.users create alice [--admin]
     python -m tw_fundamental.users reset-password alice
     python -m tw_fundamental.users set-admin alice on|off
+    python -m tw_fundamental.users set-privileged alice on|off
 """
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,
   is_admin INTEGER NOT NULL DEFAULT 0,
+  is_privileged INTEGER NOT NULL DEFAULT 0,
   is_active INTEGER NOT NULL DEFAULT 1,
   session_version INTEGER NOT NULL DEFAULT 1,
   created TEXT NOT NULL,
@@ -63,6 +65,11 @@ class User:
     created: str
     last_login: str | None
     is_guest: bool = False
+    is_privileged: bool = False
+
+    @property
+    def has_admin_rights(self) -> bool:
+        return self.is_admin or self.is_privileged
 
 
 # Signed-in visitors without an account. Parentheses cannot appear in a real username, so a guest
@@ -80,6 +87,11 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=10, isolation_level=None)  # explicit transactions below
     conn.row_factory = sqlite3.Row
     conn.execute(SCHEMA)
+    if "is_privileged" not in {r["name"] for r in conn.execute("PRAGMA table_info(users)")}:
+        try:  # databases from before privileged users
+            conn.execute("ALTER TABLE users ADD COLUMN is_privileged INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # another request added it first
     return conn
 
 
@@ -87,7 +99,8 @@ def _user(row) -> User | None:
     if row is None:
         return None
     return User(row["id"], row["username"], bool(row["is_admin"]), bool(row["is_active"]),
-                row["session_version"], row["created"], row["last_login"])
+                row["session_version"], row["created"], row["last_login"],
+                is_privileged=bool(row["is_privileged"]))
 
 
 def _now() -> str:
@@ -224,7 +237,16 @@ def _update(user_id: int, sql: str, params: tuple, guard: bool) -> None:
 
 
 def set_admin(user_id: int, is_admin: bool) -> None:
-    _update(user_id, "UPDATE users SET is_admin = ? WHERE id = ?", (int(is_admin), user_id), guard=not is_admin)
+    _update(user_id, "UPDATE users SET is_admin = ?, is_privileged = 0 WHERE id = ?", (int(is_admin), user_id),
+            guard=not is_admin)
+
+
+def set_privileged(user_id: int, privileged: bool) -> None:
+    """Admin rights without being an admin. A user holds one role, so granting it ends any admin role."""
+    if privileged:
+        _update(user_id, "UPDATE users SET is_privileged = 1, is_admin = 0 WHERE id = ?", (user_id,), guard=True)
+    else:
+        _update(user_id, "UPDATE users SET is_privileged = 0 WHERE id = ?", (user_id,), guard=False)
 
 
 def set_active(user_id: int, active: bool) -> None:
@@ -234,7 +256,9 @@ def set_active(user_id: int, active: bool) -> None:
 
 
 def delete(user_id: int) -> None:
+    from . import activity
     _update(user_id, "DELETE FROM users WHERE id = ?", (user_id,), guard=True)
+    activity.mark_deleted(user_id)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -253,12 +277,16 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("set-admin", help="grant or remove admin rights")
     a.add_argument("username")
     a.add_argument("state", choices=["on", "off"])
+    v = sub.add_parser("set-privileged", help="grant or remove privileged rights (same as an admin's)")
+    v.add_argument("username")
+    v.add_argument("state", choices=["on", "off"])
     args = ap.parse_args(argv)
 
     try:
         if args.cmd == "list":
             for u in list_users():
-                flags = ", ".join(f for f, on in (("admin", u.is_admin), ("disabled", not u.is_active)) if on)
+                flags = ", ".join(f for f, on in (("admin", u.is_admin), ("privileged", u.is_privileged),
+                                                  ("disabled", not u.is_active)) if on)
                 print(f"{u.username:<24} {flags or 'user':<16} created {u.created}  last sign-in {u.last_login or '–'}")
             return 0
         if args.cmd == "create":
@@ -283,6 +311,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "set-admin":
             set_admin(u.id, args.state == "on")
             print(f"{u.username} is {'now' if args.state == 'on' else 'no longer'} an admin")
+        elif args.cmd == "set-privileged":
+            set_privileged(u.id, args.state == "on")
+            print(f"{u.username} is {'now' if args.state == 'on' else 'no longer'} privileged")
         return 0
     except UserError as e:
         print(f"error: {e}", file=sys.stderr)

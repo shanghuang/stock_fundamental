@@ -291,3 +291,42 @@ def test_stock_report_price_section(monkeypatch):
     assert "近 30 天沒有包含此股的主題分析" in body
     body, chart = report._price_section(forecast.price_forecast(priced(eps_ttm=-1.0)), None, translator("en"))
     assert chart is None and "No implied price" in body
+
+
+def test_price_steps_show_every_calculation():
+    from tw_fundamental import report
+    en, zh = translator("en"), translator("zh-TW")
+    p = forecast.price_forecast(priced(per_q75=40.0), {2028: {"eps": 20.0, "source": "Broker X"}}, 0.1,
+                                today=date(2026, 12, 31))  # EPS 10 -> 14 (revenue), 20 (analyst), 22 (outlook)
+    steps = report.price_steps(p, en)
+    assert "EPS 14.00 = latest EPS 10.00 × (1 +40.0%)" in steps and "revenue growth over the last 3 months" in steps
+    assert "EPS 20.00: analysts’ estimate (Broker X)." in steps
+    assert "EPS 22.00 = previous year’s EPS 20.00 × (1 +10.0%)" in steps
+    assert "Low 22.00 × 10.00 = 220; base 22.00 × 15.00 = 330; high 22.00 × 30.00 = 660." in steps
+    assert "twice the median" in steps  # the 75th percentile (40×) was capped
+    assert "330 ÷ 500.0 − 1 = -34.0%" in steps
+    assert report.price_formula(p, en) == "FY2029 base NT$ 330 = EPS 22.00 × P/E 15.00×"
+    assert "2029 年基準 NT$ 330" in report.price_formula(p, zh) and "每股盈餘" not in report.price_steps(p, zh)
+
+    below = forecast.price_forecast(priced(per=8.0), None, 0.1)
+    steps = report.price_steps(below, en)
+    assert "today’s P/E, below its usual band" in steps and "EPS 11.00 = latest EPS 10.00 × (1 +10.0%): outlook growth" in steps
+    group = forecast.price_forecast(priced(per_q50=math.nan), None, 0.1, group_pe=12.0)
+    assert "group median" in report.price_steps(group, en)
+
+
+def test_analyst_loss_year_has_no_price_in_the_steps():
+    from tw_fundamental import report
+    pf = forecast.price_forecast(priced(), {2029: {"eps": -2.0, "source": "s"}}, 0.1)
+    assert "EPS is not positive" in report.price_steps(pf, translator("en"))
+    assert "is not positive" in report.price_formula(pf, translator("en"))
+
+
+def test_reports_include_the_calculation():
+    r = result()
+    p = r.profiles[0]
+    p.metrics.update(per_q25=10.0, per_q50=15.0, per_q75=25.0, per=20.0)
+    p.latest_quarter = "2026Q3"
+    p.price = forecast.price_forecast(p, None, 0.1)
+    html = theme_report.render(r)
+    assert "How each price is calculated" in html and "<details class='how'>" in html and "P/E 15.00×" in html
