@@ -94,9 +94,13 @@ def find_recent(key: str, max_age_hours: float = MAX_AGE_HOURS) -> dict | None:
     return None
 
 
-def latest_for(theme_key: str, lang: str) -> dict | None:
-    """Newest saved run of a theme, in this language if there is one, with any options."""
-    runs = [m for m in list_saved() if m.get("theme", "").lower() == theme_key.lower()]
+def latest_for(theme_key: str, lang: str, saved: list[dict] | None = None) -> dict | None:
+    """Newest saved run of a theme, in this language if there is one, with any options.
+
+    Pass `saved` (from list_saved) when looking up several themes, to read the store only once.
+    """
+    saved = list_saved() if saved is None else saved
+    runs = [m for m in saved if m.get("theme", "").lower() == theme_key.lower()]
     return next((m for m in runs if m.get("lang") == lang), runs[0] if runs else None)
 
 

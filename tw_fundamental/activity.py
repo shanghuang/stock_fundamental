@@ -28,6 +28,8 @@ ACTIONS = {
     "view-saved": N_("Opened a saved analysis"),
     "run-theme": N_("Ran a theme analysis"),
     "delete-saved": N_("Deleted a saved analysis"),
+    "portfolio-add": N_("Added to their portfolio"),
+    "portfolio-remove": N_("Removed from their portfolio"),
     "request-topic": N_("Requested a topic"),
     "withdraw-request": N_("Withdrew a topic request"),
     "decline-request": N_("Declined a topic request"),

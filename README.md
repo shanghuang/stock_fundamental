@@ -141,6 +141,12 @@ From the command line:
 .venv/bin/python -m tw_fundamental.users set-privileged alice on
 ```
 
+## Portfolio
+
+Each account has one portfolio at `/portfolio`, linked at the top of every page: the stocks and themes that person follows. Add a stock with **☆ Add to portfolio** on its report or by code on the portfolio page, and a theme with the same button on any analysis or from the list of presets. Other users cannot see it.
+
+A theme opens its newest saved analysis, so reopening one starts no new run and costs nothing; a theme with no saved run opens the normal analysis page. A portfolio holds up to 100 stocks and 30 themes. It records what you follow, not holdings, so there are no share counts or costs. Guests have no portfolio.
+
 ## Languages
 
 The web UI, reports and Claude's research are available in English and Traditional Chinese (繁體中文).
@@ -186,6 +192,7 @@ This prints a summary to the terminal and writes `reports/<id>.html`, which incl
 | `tw_fundamental/llm.py` | Optional Claude layer: web research, market forecast and per-stock SWOT |
 | `tw_fundamental/users.py` | Accounts: registration, sign-in, roles, admin actions, CLI |
 | `tw_fundamental/activity.py` | Activity log for the admin panel |
+| `tw_fundamental/portfolio.py` | Each user's chosen stocks and themes |
 | `tw_fundamental/wishlist.py` | Topic requests: submit, fulfill or decline, notifications |
 | `tw_fundamental/theme_store.py` | Saved theme analyses: save, reuse, list, delete |
 | `tw_fundamental/forecast.py` | Six-year market outlook (Claude or extrapolated), forward P/E, implied prices |

@@ -453,8 +453,10 @@ input, select, button, textarea { font: inherit; color: var(--text-primary); bac
 button { cursor: pointer; }
 button:hover { border-color: var(--text-secondary); }
 .nav .who { margin-left: auto; display: flex; gap: 12px; align-items: center; }
-.nav .who + .lang, .nav form + .who { margin-left: 0; }
+.nav .who + .lang, .nav form:not(.inline) + .who { margin-left: 0; }
 .nav form.inline { margin-left: 0; display: inline; }
+.nav .pin button { color: var(--text-secondary); text-decoration: none; }
+.nav .pin button:hover { color: var(--text-primary); }
 form.inline { display: inline; margin: 0; }
 button.link { border: 0; background: none; padding: 0; color: var(--text-secondary); text-decoration: underline; }
 button.link:hover { color: var(--text-primary); }

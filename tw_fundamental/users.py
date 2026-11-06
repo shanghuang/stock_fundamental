@@ -256,9 +256,10 @@ def set_active(user_id: int, active: bool) -> None:
 
 
 def delete(user_id: int) -> None:
-    from . import activity
+    from . import activity, portfolio
     _update(user_id, "DELETE FROM users WHERE id = ?", (user_id,), guard=True)
     activity.mark_deleted(user_id)
+    portfolio.remove_user(user_id)
 
 
 def main(argv: list[str] | None = None) -> int:

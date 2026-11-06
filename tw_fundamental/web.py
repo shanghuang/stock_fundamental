@@ -21,7 +21,7 @@ from .finmind import FinMindError
 from .i18n import DEFAULT_LANG, HTML_LANG, LANGS, normalize, translator
 from .pipeline import STOCK_ID_RE, build_report, list_stocks
 from .report import BASE_CSS, tr_market
-from . import activity, llm, theme, theme_report, theme_store, users, wishlist
+from . import activity, llm, portfolio, theme, theme_report, theme_store, users, wishlist
 
 class _SessionInterface(SecureCookieSessionInterface):
     """Loads the signing key on first use; Flask opens the session before any before_request hook runs."""
@@ -160,7 +160,8 @@ def _user_menu() -> str:
         n = wishlist.pending_count()
         badge = f" <span class='badge'>{n}</span>" if n else ""
         admin = f"<a href='{url_for('admin_panel')}'>{tr('Admin panel')}{badge}</a>"
-    return (f"<span class='who'><a href='{url_for('account')}' title='{tr('Account')}'>{html.escape(u.username)}</a>"
+    return (f"<span class='who'><a href='{url_for('portfolio_page')}'>{tr('Portfolio')}</a>"
+            f"<a href='{url_for('account')}' title='{tr('Account')}'>{html.escape(u.username)}</a>"
             f"{admin}<form method='post' action='{url_for('logout')}' class='inline'>{_csrf_field()}"
             f"<button type='submit' class='link'>{tr('Sign out')}</button></form></span>")
 
@@ -239,12 +240,42 @@ def _year_options(selected: int) -> str:
                    for y in YEAR_CHOICES)
 
 
-def _nav(stock_id: str, years: int) -> str:
+def _stock_pin(stock_id: str, years: int) -> str:
+    """Add/remove button for a stock's report. Comes back to the report, without any refresh=1."""
+    if _user() is None or _is_guest():
+        return ""
+    inside = portfolio.has_stock(_user().id, stock_id)
+    label, target = ((tr("★ In portfolio"), "portfolio_stock_remove") if inside
+                     else (tr("☆ Add to portfolio"), "portfolio_stock_add"))
+    back = url_for("report_page", stock_id=stock_id, years=years)
+    return (f"<form method='post' action='{url_for(target)}' class='inline pin'>{_csrf_field()}"
+            f"<input type='hidden' name='id' value='{html.escape(stock_id)}'>"
+            f"<input type='hidden' name='next' value='{html.escape(back)}'>"
+            f"<button type='submit' class='link'>{label}</button></form>")
+
+
+def _theme_pin(key: str, query: dict, rid: str) -> str:
+    """Add/remove button for a theme. Comes back to the saved run: going back to the address of a
+    fresh run (rerun=1) would run, and maybe pay for, the analysis again."""
+    if _user() is None or _is_guest():
+        return ""
+    inside = portfolio.has_theme(_user().id, key)
+    label, target = ((tr("★ In portfolio"), "portfolio_theme_remove") if inside
+                     else (tr("☆ Add to portfolio"), "portfolio_theme_add"))
+    fields = {"name": key, "keywords": query.get("keywords", ""), "stocks": query.get("stocks", ""),
+              "next": url_for("saved_view", rid=rid)}
+    hidden = "".join(f"<input type='hidden' name='{k}' value='{html.escape(str(v))}'>" for k, v in fields.items())
+    return (f"<form method='post' action='{url_for(target)}' class='inline pin'>{_csrf_field()}{hidden}"
+            f"<button type='submit' class='link'>{label}</button></form>")
+
+
+def _nav(stock_id: str, years: int, pin: bool = True) -> str:
     sid = html.escape(stock_id)
     return f"""<nav class="nav">
   <a href="{url_for('index')}">{tr('← All stocks')}</a>
   <a href="{url_for('themes')}">{tr('Themes')}</a>
   <a href="{url_for('report_page', stock_id=stock_id, years=years, refresh=1)}" title="{tr('Re-download from FinMind')}">{tr('Refresh data')}</a>
+  {_stock_pin(stock_id, years) if pin else ''}
   <form action="{url_for('report_query')}" method="get">
     <input name="id" value="{sid}" size="8" aria-label="{tr('Stock code')}" placeholder="{tr('Code')}">
     <select name="years" aria-label="{tr('History')}">{_year_options(years)}</select>
@@ -270,10 +301,10 @@ def _page(title: str, body: str, status: int = 200) -> Response:
     return Response(doc, status=status, mimetype="text/html")
 
 
-def _theme_nav() -> str:
+def _theme_nav(pin: str = "") -> str:
     return (f"<nav class='nav'><a href='{url_for('index')}'>{tr('← All stocks')}</a>"
             f"<a href='{url_for('themes')}'>{tr('Themes')}</a>"
-            f"<a href='{url_for('saved_list')}'>{tr('Saved analyses')}</a>{_nav_right()}</nav>")
+            f"<a href='{url_for('saved_list')}'>{tr('Saved analyses')}</a>{pin}{_nav_right()}</nav>")
 
 
 def _fmt_time(iso: str) -> str:
@@ -639,13 +670,20 @@ def requests_notices():
     return Response(_notice_pop(_user(), _safe_next(request.args.get("next"))), mimetype="text/html")
 
 
+def _keyword_list(raw: str) -> list[str]:
+    return [k.strip()[:30] for k in re.split(r"[,，、]", raw) if k.strip()][:12]
+
+
+def _stock_list(raw: str) -> list[str]:
+    return [s for s in re.split(r"[,，\s]+", raw) if s]
+
+
 @app.get("/theme")
 def theme_page():
     name = request.args.get("name", "").strip()[:40]
     if not name:
         return redirect(url_for("themes"))
-    keywords = [k.strip()[:30] for k in re.split(r"[,，、]", request.args.get("keywords", "")) if k.strip()][:12]
-    stocks = [s for s in re.split(r"[,，\s]+", request.args.get("stocks", "")) if s]
+    keywords, stocks = _keyword_list(request.args.get("keywords", "")), _stock_list(request.args.get("stocks", ""))
     bad = [s for s in stocks if not STOCK_ID_RE.match(s)]
     nav = _theme_nav()
     if bad:
@@ -684,6 +722,7 @@ def theme_page():
                             else tr("no Claude credentials found (set ANTHROPIC_API_KEY)"))
     rid = theme_store.save(result, key, query, owner=_user().username)
     _log("run-theme", f"{t.title} · Claude" if use_llm else t.title)
+    nav = _theme_nav(_theme_pin(t.key, query, rid))
     html_doc = theme_report.render(result, nav=nav + _fulfilled_banner(_fulfill_request(rid, t)),
                                    link=lambda sid: url_for("report_page", stock_id=sid))
     return Response(html_doc, mimetype="text/html")
@@ -778,7 +817,8 @@ def _saved_response(rid: str, reused: bool = False, fulfilled: list[int] | None 
     again = ("" if _is_guest() else f"<a href='{html.escape(rerun)}' style='color:inherit;font-weight:600;margin-left:4px'>"
              f"{tr('Run again with fresh data')}</a>")
     banner = f"<div class='panel' style='margin-bottom:20px'>{html.escape(note)} {again}</div>"
-    html_doc = theme_report.render(result, nav=_theme_nav() + _fulfilled_banner(fulfilled or []) + banner,
+    nav = _theme_nav(_theme_pin(meta.get("theme") or result.theme.key, meta.get("query", {}), rid))
+    html_doc = theme_report.render(result, nav=nav + _fulfilled_banner(fulfilled or []) + banner,
                                    link=lambda sid: url_for("report_page", stock_id=sid))
     return Response(html_doc, mimetype="text/html")
 
@@ -808,6 +848,143 @@ def saved_delete(rid: str):
     theme_store.delete(rid)
     _log("delete-saved", meta.get("title", rid))
     return redirect(url_for("saved_list"), code=303)
+
+
+# --------------------------------------------------------------------------- portfolio
+
+def _portfolio_back() -> Response:
+    return redirect(_safe_next(request.form.get("next") or url_for("portfolio_page")), code=303)
+
+
+def _portfolio_stocks_table(items: list[portfolio.StockItem], by_id: dict[str, dict]) -> str:
+    if not items:
+        return f"<p class='muted'>{tr('No stocks yet. Add one here, or from any stock report.')}</p>"
+    rows = []
+    for s in items:
+        info = by_id.get(s.stock_id, {})
+        market = tr_market(info["market"], _lang()) if info.get("market") else "–"
+        rows.append(
+            f"<tr><td><a href='{url_for('report_page', stock_id=s.stock_id)}'>{html.escape(s.stock_id)}</a></td>"
+            f"<td>{html.escape(info.get('name', '–'))}</td><td>{html.escape(market)}</td>"
+            f"<td>{html.escape(info.get('industry', '') or '–')}</td><td>{html.escape(s.added[:10])}</td>"
+            f"<td><form method='post' action='{url_for('portfolio_stock_remove')}' class='inline'>{_csrf_field()}"
+            f"<input type='hidden' name='id' value='{html.escape(s.stock_id)}'>"
+            f"<button type='submit' class='link'>{tr('Remove')}</button></form></td></tr>")
+    head = "".join(f"<th>{h}</th>" for h in (tr("Code"), tr("Name"), tr("Market"), tr("Industry"), tr("Added"), ""))
+    return (f"<div class='panel scroll'><table id='saved'><thead><tr>{head}</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>")
+
+
+def _portfolio_themes_table(items: list[portfolio.ThemeItem], presets: dict[str, theme.Theme]) -> str:
+    if not items:
+        return f"<p class='muted'>{tr('No themes yet. Add one here, or from any theme analysis.')}</p>"
+    saved = theme_store.list_saved()
+    rows = []
+    for t in items:
+        latest = theme_store.latest_for(t.key, _lang(), saved)
+        title = presets[t.key].title if t.key in presets else t.title
+        if latest:
+            href = url_for("saved_view", rid=latest["id"])
+            run = (f"{html.escape(_fmt_time(latest['created']))} · "
+                   f"{html.escape(LANGS.get(latest.get('lang'), latest.get('lang', '')))}")
+        else:
+            query = {k: v for k, v in (("keywords", t.keywords), ("stocks", t.stocks)) if v}
+            href = url_for("theme_page", name=t.key, **query)
+            run = tr("Not analyzed yet")
+        rows.append(
+            f"<tr><td><a href='{html.escape(href)}'>{html.escape(title)}</a></td><td>{run}</td>"
+            f"<td>{html.escape(t.added[:10])}</td>"
+            f"<td><form method='post' action='{url_for('portfolio_theme_remove')}' class='inline'>{_csrf_field()}"
+            f"<input type='hidden' name='name' value='{html.escape(t.key)}'>"
+            f"<button type='submit' class='link'>{tr('Remove')}</button></form></td></tr>")
+    head = "".join(f"<th>{h}</th>" for h in (tr("Theme"), tr("Latest analysis"), tr("Added"), ""))
+    return (f"<div class='panel scroll'><table id='saved'><thead><tr>{head}</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>")
+
+
+@app.get("/portfolio")
+def portfolio_page():
+    uid = _user().id
+    try:
+        by_id = {s["id"]: s for s in list_stocks()}
+    except FinMindError:
+        by_id = {}  # the page still works, with codes but no names
+    stocks, chosen = portfolio.stocks(uid), portfolio.themes(uid)
+    presets = theme.load_presets(_lang())
+    have = {t.key for t in chosen}
+    options = "".join(f"<option value='{html.escape(k)}'>{html.escape(t.title)}</option>"
+                      for k, t in presets.items() if k not in have)
+    add_theme = (f"<form method='post' action='{url_for('portfolio_theme_add')}' class='add-row'>{_csrf_field()}"
+                 f"<select name='name' aria-label='{tr('Theme')}'>{options}</select>"
+                 f"<button type='submit'>{tr('Add')}</button></form>" if options else "")
+    body = f"""{_theme_nav()}
+<h1>{tr('Portfolio')}</h1>
+<div class="meta">{tr('The stocks and themes you follow')}</div>
+
+<h2>{tr('Followed stocks')} <span class="muted small">{len(stocks)}</span></h2>
+<form method="post" action="{url_for('portfolio_stock_add')}" class="add-row">{_csrf_field()}
+  <input name="id" required maxlength="40" size="10" aria-label="{tr('Stock code')}" placeholder="{tr('Code')}">
+  <button type="submit">{tr('Add')}</button>
+</form>
+{_portfolio_stocks_table(stocks, by_id)}
+
+<h2>{tr('Followed themes')} <span class="muted small">{len(chosen)}</span></h2>
+{add_theme}
+{_portfolio_themes_table(chosen, presets)}"""
+    return _page(tr("Portfolio"), body)
+
+
+@app.post("/portfolio/stock/add")
+def portfolio_stock_add():
+    raw = request.form.get("id", "").strip()
+    stock_id = raw.split()[0] if raw else ""  # accepts "2330", "2330 台積電"
+    try:
+        listed = {s["id"] for s in list_stocks()}
+    except FinMindError:
+        listed = None  # cannot check right now; the format check below still applies
+    if not STOCK_ID_RE.match(stock_id) or (listed is not None and stock_id not in listed):
+        flash(tr("“{code}” is not a listed company.", code=stock_id), "error")
+        return redirect(url_for("portfolio_page"), code=303)
+    try:
+        if portfolio.add_stock(_user().id, stock_id):
+            _log("portfolio-add", stock_id)
+    except users.UserError as e:
+        flash(_user_error(e), "error")
+        return redirect(url_for("portfolio_page"), code=303)
+    return _portfolio_back()
+
+
+@app.post("/portfolio/stock/remove")
+def portfolio_stock_remove():
+    stock_id = request.form.get("id", "")
+    if portfolio.remove_stock(_user().id, stock_id):
+        _log("portfolio-remove", stock_id)
+    return _portfolio_back()
+
+
+@app.post("/portfolio/theme/add")
+def portfolio_theme_add():
+    name = request.form.get("name", "").strip()[:40]
+    keywords, stocks = _keyword_list(request.form.get("keywords", "")), _stock_list(request.form.get("stocks", ""))
+    if not name or not all(STOCK_ID_RE.match(s) for s in stocks):
+        flash(tr("That theme could not be added."), "error")
+        return redirect(url_for("portfolio_page"), code=303)
+    t = theme.make_theme(name, keywords or None, stocks or None, lang=_lang())
+    try:
+        if portfolio.add_theme(_user().id, t.key, t.title, ", ".join(keywords), " ".join(stocks[:theme.MAX_STOCKS])):
+            _log("portfolio-add", t.title)
+    except users.UserError as e:
+        flash(_user_error(e), "error")
+        return redirect(url_for("portfolio_page"), code=303)
+    return _portfolio_back()
+
+
+@app.post("/portfolio/theme/remove")
+def portfolio_theme_remove():
+    key = request.form.get("name", "")
+    if portfolio.remove_theme(_user().id, key):
+        _log("portfolio-remove", key)
+    return _portfolio_back()
 
 
 # --------------------------------------------------------------------------- account pages
@@ -1207,11 +1384,12 @@ def admin_request_decline(req_id: int):
 
 
 def _error(stock_id: str, years: int, message: str, status: int) -> Response:
-    body = f"{_nav(stock_id, years)}<h1>{tr('No report')}</h1><p class='muted'>{html.escape(message)}</p>"
+    body = f"{_nav(stock_id, years, pin=False)}<h1>{tr('No report')}</h1><p class='muted'>{html.escape(message)}</p>"
     return _page(tr("No report"), body, status)
 
 
 _INDEX_CSS = """
+.add-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 12px 0 20px; border-bottom: 1px solid var(--border); }
 .tabs a { padding: 6px 12px; color: var(--text-secondary); text-decoration: none; border-bottom: 2px solid transparent;
   margin-bottom: -1px; }
